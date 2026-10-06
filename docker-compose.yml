@@ -1,0 +1,19 @@
+services:
+  vandyke:
+    build: .
+    image: vandyke:latest
+    container_name: vandyke
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DB_PATH: /data/vandyke.db
+      TRUST_PROXY: "false"
+      ADD_RATE_LIMIT_PER_HOUR: "10"
+      ADD_RATE_LIMIT_BURST: "5"
+      UMAMI_URL: ${UMAMI_URL:-}
+      UMAMI_WEBSITE_ID: ${UMAMI_WEBSITE_ID:-}
+      UMAMI_DOMAINS: ${UMAMI_DOMAINS:-}
+    volumes:
+      - ./data:/data

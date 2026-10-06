@@ -1,0 +1,58 @@
+{{define "ledger"}}
+<section id="ledger" class="ledger" aria-live="polite">
+  <div class="ledger-meta">
+    <p class="ledger-count">
+      {{if .Ledger.Total}}<strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong> entries{{else}}No entries{{end}}{{if .Ledger.Query.Q}} for “{{.Ledger.Query.Q}}”{{end}}
+    </p>
+    <p class="ledger-sort">sorted by {{.Ledger.Query.SortLabel}}<span class="dot" aria-hidden="true">·</span>misspelling <span class="arrow-mini" aria-hidden="true">→</span> correction</p>
+  </div>
+
+  {{if .Ledger.Entries}}
+  <div class="entries" role="table" aria-label="Misspelling ledger">
+    <div class="entries-head" role="row">
+      <span class="col-no" role="columnheader">No.</span>
+      <a class="col-word{{if eq .Ledger.Query.Sort "word"}} is-active{{end}}" role="columnheader" href="{{.Ledger.SortHref "word"}}" hx-get="{{.Ledger.SortHref "word"}}" hx-target="#ledger" hx-swap="outerHTML">Misspelling <span class="sort-mark">{{.Ledger.SortMark "word"}}</span></a>
+      <a class="col-meaning{{if eq .Ledger.Query.Sort "meaning"}} is-active{{end}}" role="columnheader" href="{{.Ledger.SortHref "meaning"}}" hx-get="{{.Ledger.SortHref "meaning"}}" hx-target="#ledger" hx-swap="outerHTML">Correction <span class="sort-mark">{{.Ledger.SortMark "meaning"}}</span></a>
+      <a class="col-date{{if eq .Ledger.Query.Sort "created_at"}} is-active{{end}}" role="columnheader" href="{{.Ledger.SortHref "created_at"}}" hx-get="{{.Ledger.SortHref "created_at"}}" hx-target="#ledger" hx-swap="outerHTML">Logged <span class="sort-mark">{{.Ledger.SortMark "created_at"}}</span></a>
+    </div>
+    <ol class="entries-list" role="rowgroup">
+      {{range $i, $entry := .Ledger.Entries}}
+      <li class="entry" role="row" data-entry-id="{{$entry.ID}}" style="--i:{{$i}}">
+        <span class="col-no" role="cell">{{entryNo $entry.ID}}</span>
+        <span class="col-word" role="cell"><span class="wrong">{{$entry.Word}}</span></span>
+        <span class="col-meaning" role="cell"><span class="arrow" aria-hidden="true">→</span><span class="right">{{$entry.Meaning}}</span></span>
+        <time class="col-date" role="cell" datetime="{{$entry.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate $entry.CreatedAt}}</time>
+      </li>
+      {{end}}
+    </ol>
+  </div>
+
+  {{if gt .Ledger.Pages 1}}
+  <nav class="pager" aria-label="Ledger pages">
+    {{if gt .Ledger.Query.Page 1}}
+      <a class="page-btn page-edge" href="{{.Ledger.PageHref (dec .Ledger.Query.Page)}}" hx-get="{{.Ledger.PageHref (dec .Ledger.Query.Page)}}" hx-target="#ledger" hx-swap="outerHTML" rel="prev">← Prev</a>
+    {{else}}
+      <span class="page-btn page-edge is-disabled">← Prev</span>
+    {{end}}
+    <span class="page-nums">
+      {{range .Ledger.PageLinks}}{{if .Gap}}<span class="page-gap" aria-hidden="true">…</span>{{else}}<a class="page-btn page-num{{if .Active}} is-active{{end}}" href="{{.URL}}" hx-get="{{.URL}}" hx-target="#ledger" hx-swap="outerHTML"{{if .Active}} aria-current="page"{{end}}>{{.Num}}</a>{{end}}{{end}}
+    </span>
+    {{if lt .Ledger.Query.Page .Ledger.Pages}}
+      <a class="page-btn page-edge" href="{{.Ledger.PageHref (inc .Ledger.Query.Page)}}" hx-get="{{.Ledger.PageHref (inc .Ledger.Query.Page)}}" hx-target="#ledger" hx-swap="outerHTML" rel="next">Next →</a>
+    {{else}}
+      <span class="page-btn page-edge is-disabled">Next →</span>
+    {{end}}
+  </nav>
+  {{end}}
+
+  {{else}}
+  <div class="empty">
+    <p class="empty-title">Nothing found</p>
+    <p class="empty-text">No entry matches {{if .Ledger.Query.Q}}“{{.Ledger.Query.Q}}”{{else}}your search{{end}} — maybe it is still waiting to be written down.</p>
+    <a class="btn btn-ghost" href="/entries" hx-get="/entries" hx-target="#ledger" hx-swap="outerHTML">Clear search</a>
+  </div>
+  {{end}}
+</section>
+{{end}}
+
+{{define "form-error"}}<span class="form-error-text">{{.}}</span>{{end}}

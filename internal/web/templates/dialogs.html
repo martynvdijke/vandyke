@@ -1,0 +1,50 @@
+{{define "add-dialog"}}
+<dialog id="add-dialog" class="dialog"{{if .ShowAdd}} open{{end}} aria-labelledby="add-dialog-title">
+  <form class="dialog-card" action="/entries" method="post"
+        hx-post="/entries" hx-target="#ledger" hx-swap="outerHTML">
+    <input type="hidden" name="q" value="{{.Ledger.Query.Q}}">
+    <input type="hidden" name="sort" value="{{.Ledger.Query.Sort}}">
+    <input type="hidden" name="order" value="{{.Ledger.Query.Order}}">
+    <input type="hidden" name="per_page" value="{{.Ledger.Query.PerPage}}">
+    <header class="dialog-head">
+      <h2 id="add-dialog-title">Add to the ledger</h2>
+      <button class="icon-btn" type="button" data-dialog-close aria-label="Close">×</button>
+    </header>
+    <div class="dialog-body">
+      <p id="form-error" class="form-error" role="alert">{{.FormError}}</p>
+      <label class="field">
+        <span class="field-label">The misspelling</span>
+        <input type="text" name="word" value="{{.FormWord}}" maxlength="200" required placeholder="bv. feutenreus" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">It should have been</span>
+        <input type="text" name="meaning" value="{{.FormMeaning}}" maxlength="500" required placeholder="bv. feature" autocomplete="off">
+      </label>
+      <p class="field-hint">Trimmed, logged with today's date and added to the ledger right away.</p>
+    </div>
+    <footer class="dialog-foot">
+      <button class="btn btn-ghost" type="button" data-dialog-close>Cancel</button>
+      <button class="btn btn-primary" type="submit">Add entry</button>
+    </footer>
+  </form>
+</dialog>
+{{end}}
+
+{{define "info-dialog"}}
+<dialog id="info-dialog" class="dialog"{{if .ShowInfo}} open{{end}} aria-labelledby="info-dialog-title">
+  <div class="dialog-card">
+    <header class="dialog-head">
+      <h2 id="info-dialog-title">The story</h2>
+      <button class="icon-btn" type="button" data-dialog-close aria-label="Close">×</button>
+    </header>
+    <div class="dialog-body prose">
+      <p>This website started as an internal joke in the LANCo committee. Where M. van Dijke makes spelling errors — and since his last name closely resembles a Dutch dictionary — the idea spawned to write the errors down and make a coherent database out of them.</p>
+      <p>Since the initial idea the database has been extended with more spelling errors from the LANCo committee. Additions are welcome: hit the red <strong>+</strong>, fill in the form, and the slip is immortalised.</p>
+      <p class="muted">Originally served at <a href="https://vandyke.thor.edu/">vandyke.thor.edu</a>. Rebuilt with Go, SQLite and HTMX — every historical entry carried over, timestamps and all.</p>
+    </div>
+    <footer class="dialog-foot">
+      <button class="btn btn-primary" type="button" data-dialog-close>Close</button>
+    </footer>
+  </div>
+</dialog>
+{{end}}

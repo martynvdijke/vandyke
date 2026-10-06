@@ -1,0 +1,109 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vanDyke — the LANCo misspelling ledger</title>
+  <meta name="description" content="A ledger of spelling errors, misheard words and creative typos. Born as an internal joke of the LANCo committee.">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="wordmark" href="/">vanDyke</a>
+      <nav class="masthead-nav" aria-label="Main">
+        <a class="nav-link" href="/?info=1" data-dialog-open="#info-dialog">The story</a>
+        <a class="nav-link nav-link-muted" href="/api/v1/entries">API</a>
+        <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme">
+          <span class="theme-dot" aria-hidden="true"></span>
+        </button>
+        <a class="btn btn-primary btn-add" href="/?add=1" data-dialog-open="#add-dialog"><span aria-hidden="true">+</span> Add entry</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">LANCo · TesLAN · since 2017</p>
+      <h1 class="hero-title">van<span class="hero-dyke">Dyke<svg class="hero-scribble" viewBox="0 0 240 16" preserveAspectRatio="none" aria-hidden="true"><path d="M4 11 C 64 4, 156 3, 236 9" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg></span></h1>
+      <p class="hero-lede">A ledger of <em>verschrijvingen</em> — misheard words, creative typos and other slips of the pen, collected by the LANCo committee. It began when M.&nbsp;van Dijke's surname turned out to double as a Dutch dictionary.</p>
+    </section>
+
+    <section class="stats" aria-label="Ledger statistics">
+      <div class="stat">
+        <span class="stat-value">{{.Stats.Total}}</span>
+        <span class="stat-label">entries in the ledger</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.Stats.UniqueWords}}</span>
+        <span class="stat-label">unique misspellings</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.SpanYears}}</span>
+        <span class="stat-label">years of slips</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value stat-value-date">{{formatDateP .Stats.LastEntryAt}}</span>
+        <span class="stat-label">last addition</span>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="Ledger">
+      <form id="search-form" class="toolbar" action="/" method="get"
+            hx-get="/entries" hx-target="#ledger" hx-swap="outerHTML"
+            hx-trigger="submit, input changed delay:300ms, search, change">
+        <input type="hidden" name="sort" value="{{.Ledger.Query.Sort}}">
+        <input type="hidden" name="order" value="{{.Ledger.Query.Order}}">
+        <label class="searchbox">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5 L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <input type="search" name="q" value="{{.Ledger.Query.Q}}" placeholder="Search misspellings and corrections…" autocomplete="off" aria-label="Search the ledger">
+        </label>
+        <label class="pagesize">
+          <span>Rows</span>
+          <select name="per_page" aria-label="Entries per page">
+            <option value="30"{{if eq .Ledger.Query.PerPage 30}} selected{{end}}>30</option>
+            <option value="50"{{if eq .Ledger.Query.PerPage 50}} selected{{end}}>50</option>
+            <option value="100"{{if eq .Ledger.Query.PerPage 100}} selected{{end}}>100</option>
+          </select>
+        </label>
+        <noscript><button class="btn btn-primary" type="submit">Search</button></noscript>
+      </form>
+
+      {{template "ledger" .}}
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <span class="footer-word">vanDyke</span>
+        <p>An internal joke of the LANCo committee, rebuilt as a modern, self-hosted ledger. The original data was lovingly carried over from <a href="https://vandyke.thor.edu/">vandyke.thor.edu</a>.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://teslan.thor.edu/">TesLAN</a>
+        <a href="https://thor.edu/committee/lanco">LANCo committee</a>
+        <a href="/api/v1/entries">JSON API</a>
+        <a href="/healthz">Health</a>
+      </nav>
+      <p class="footer-fine">© 2017–{{.Year}} LANCo · <span class="footer-fix">kast systeem <span aria-hidden="true">→</span> kassasysteem</span></p>
+    </div>
+  </footer>
+
+  <a class="fab" href="/?add=1" data-dialog-open="#add-dialog" aria-label="Add a misspelling">+</a>
+
+  {{template "add-dialog" .}}
+  {{template "info-dialog" .}}
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite">
+    {{if .Added}}<div class="toast toast-server is-in">Added to the ledger. Dank je wel!</div>{{end}}
+  </div>
+
+  <script src="/static/vendor/htmx.min.js" defer></script>
+</body>
+</html>{{end}}
