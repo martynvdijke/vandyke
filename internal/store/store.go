@@ -145,17 +145,17 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	db.SetMaxIdleConns(4)
 
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 
 	s := &Store{db: db}
 	if err := s.migrate(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	if err := s.seedIfEmpty(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
@@ -203,12 +203,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		for _, stmt := range splitStatements(string(body)) {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				tx.Rollback()
+				_ = tx.Rollback()
 				return fmt.Errorf("apply migration %s: %w", version, err)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("record migration %s: %w", version, err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -263,14 +263,14 @@ func (s *Store) seedIfEmpty(ctx context.Context) error {
 	}
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO entries (word, meaning, created_at) VALUES (?, ?, ?)`)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("prepare seed insert: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, row := range rows {
 		if _, err := stmt.ExecContext(ctx, row.Word, row.Meaning, row.CreatedAt); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("seed entry %q: %w", row.Word, err)
 		}
 	}
@@ -316,7 +316,7 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 	if err != nil {
 		return Page{}, fmt.Errorf("query entries: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	entries := make([]Entry, 0, p.PerPage)
 	for rows.Next() {

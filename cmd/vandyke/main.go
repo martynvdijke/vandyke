@@ -20,6 +20,10 @@ import (
 	"vandyke.thor.edu/vandyke/internal/web"
 )
 
+// Version is the application version. It is rewritten by semantic-release on
+// every published release.
+var Version = "0.0.0"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
@@ -42,7 +46,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	limiter := ratelimit.New(cfg.AddRateLimitPerHour, cfg.AddRateLimitBurst)
 	api := httpapi.New(st, limiter, cfg.TrustProxy, logger)
@@ -72,6 +76,7 @@ func run() error {
 
 	go func() {
 		logger.Info("vanDyke listening",
+			"version", Version,
 			"addr", srv.Addr,
 			"db", cfg.DBPath,
 			"umami", cfg.Umami.Enabled(),

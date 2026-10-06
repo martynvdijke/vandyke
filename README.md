@@ -162,3 +162,22 @@ The suite covers the store (seeding, search with escaped wildcards, sorting,
 pagination, validation, stats), the rate limiter, the JSON API, and the web
 layer (partial rendering, HTMX flows, no-JS flows, rate-limit errors, Umami
 injection, cache headers).
+
+## CI, releases and updates
+
+- **CI** (`.github/workflows/ci.yaml`) — builds, vets, lints
+  (`golangci-lint`) and tests every push and pull request, and uploads a
+  coverage report.
+- **Releases** (`release.yaml`) — [semantic-release](https://semantic-release.gitbook.io/)
+  turns Conventional Commits into tags, GitHub releases and a changelog, then
+  publishes the Docker image to `martynvandijke/vandyke` on Docker Hub and
+  `ghcr.io/martynvdijke/vandyke` on GHCR.
+- **Renovate** (`renovate.json`, `renovate.yml`) — scheduled dependency
+  updates with automerge.
+- **Docs** (`docs.yml`) — builds the `docs/` folder with Zensical and deploys
+  it to GitHub Pages (enable Pages → Source: GitHub Actions once).
+- **Workflow lint** (`workflow-lint.yml`) and **stale branches**
+  (`stale-branches.yml`) — actionlint/zizmor/pinact checks and branch hygiene.
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
+`feat:` bumps the minor version, `fix:` and friends bump the patch version.
