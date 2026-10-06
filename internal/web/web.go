@@ -246,7 +246,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 	trigger, _ := json.Marshal(map[string]any{
 		"entryAdded": map[string]any{"id": entry.ID, "word": entry.Word},
 	})
-	rw.Header().Set("HX-Trigger", string(trigger))
+	rw.Header().Set("HX-Trigger-After-Swap", string(trigger))
 
 	ledger, err := w.buildLedger(r)
 	if err != nil {

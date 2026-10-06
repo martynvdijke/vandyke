@@ -181,9 +181,9 @@ func TestCreateEntryHTMX(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)
 	}
-	trigger := headers.Get("HX-Trigger")
+	trigger := headers.Get("HX-Trigger-After-Swap")
 	if !strings.Contains(trigger, "entryAdded") || !strings.Contains(trigger, "nieuw woord") {
-		t.Fatalf("HX-Trigger = %q, want entryAdded with the word", trigger)
+		t.Fatalf("HX-Trigger-After-Swap = %q, want entryAdded with the word", trigger)
 	}
 	if !strings.Contains(body, "nieuw woord") {
 		t.Fatal("re-rendered ledger does not contain the new entry")

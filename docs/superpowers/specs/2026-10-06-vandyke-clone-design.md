@@ -94,7 +94,7 @@ misspelling is struck through, then an arrow, then the correction in a display s
 - HTMX interactions:
   - live search (300 ms debounce) and `per_page` filter → swaps `#ledger`
   - sortable column headers, pagination — all server-rendered, URL state preserved
-  - add-word `<dialog>` → POSTs form, swaps ledger, `HX-Trigger: entryAdded` shows a toast
+  - add-word `<dialog>` → POSTs form, swaps ledger, `HX-Trigger-After-Swap: entryAdded` shows a toast and highlights the new row
   - validation errors retarget a `#form-error` slot via `HX-Retarget` (200 response so htmx swaps)
 - Footer keeps the original TesLAN / LANCo links.
 - Graceful no-JS fallback: form posts normally and redirects; search/sort are plain links.
