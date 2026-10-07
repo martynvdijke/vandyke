@@ -15,7 +15,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/vandyke ./cmd/vandyke
 
 # ---------- runtime ----------
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -g 10001 -S vandyke \
