@@ -1,4 +1,9 @@
 // Package ratelimit provides a per-key token bucket limiter.
+//
+// Limits are process-local: each replica keeps its own buckets, and counters
+// reset on restart. Deployments that need a global budget must enforce it at
+// the reverse proxy or in a shared store. The bucket map is bounded and idle
+// keys are swept so a long-running process cannot grow without limit.
 package ratelimit
 
 import (
@@ -20,7 +25,11 @@ type Limiter struct {
 	now       func() time.Time
 	idle      time.Duration
 	lastSweep time.Time
+	maxKeys   int
 }
+
+// defaultMaxKeys bounds memory if many distinct keys are seen between sweeps.
+const defaultMaxKeys = 10000
 
 type bucket struct {
 	limiter *rate.Limiter
@@ -44,6 +53,7 @@ func New(perHour float64, burst int) *Limiter {
 		now:       time.Now,
 		idle:      24 * time.Hour,
 		lastSweep: time.Now(),
+		maxKeys:   defaultMaxKeys,
 	}
 }
 
@@ -59,6 +69,11 @@ func (l *Limiter) Allow(key string) bool {
 
 	b, ok := l.buckets[key]
 	if !ok {
+		if len(l.buckets) >= l.maxKeys {
+			// Still full after the periodic sweep: evict the least recently
+			// seen key so the map stays bounded.
+			l.evictOldest()
+		}
 		b = &bucket{limiter: rate.NewLimiter(l.limit, l.burst)}
 		l.buckets[key] = b
 	}
@@ -69,6 +84,20 @@ func (l *Limiter) Allow(key string) bool {
 // RetryAfterSeconds is a hint for the Retry-After header after a denial.
 func (l *Limiter) RetryAfterSeconds() int {
 	return int(math.Ceil(l.refillMin))
+}
+
+func (l *Limiter) evictOldest() {
+	var oldestKey string
+	var oldest time.Time
+	for key, b := range l.buckets {
+		if oldestKey == "" || b.seen.Before(oldest) {
+			oldestKey = key
+			oldest = b.seen
+		}
+	}
+	if oldestKey != "" {
+		delete(l.buckets, oldestKey)
+	}
 }
 
 func (l *Limiter) sweep(now time.Time) {

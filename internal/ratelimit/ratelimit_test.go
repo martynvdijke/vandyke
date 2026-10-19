@@ -75,3 +75,27 @@ func TestInvalidConfigurationIsClamped(t *testing.T) {
 		t.Fatal("other key denied, want allowed")
 	}
 }
+
+func TestMapIsBounded(t *testing.T) {
+	base := time.Now()
+	l := New(60, 1)
+	l.now = func() time.Time { return base }
+	l.maxKeys = 3
+
+	for _, key := range []string{"a", "b", "c"} {
+		if !l.Allow(key) {
+			t.Fatalf("key %q denied", key)
+		}
+		base = base.Add(time.Second)
+	}
+	if got := l.Len(); got != 3 {
+		t.Fatalf("tracked keys = %d, want 3", got)
+	}
+
+	if !l.Allow("d") {
+		t.Fatal("new key denied")
+	}
+	if got := l.Len(); got != 3 {
+		t.Fatalf("tracked keys after eviction = %d, want 3", got)
+	}
+}

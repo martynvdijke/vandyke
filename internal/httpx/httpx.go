@@ -82,7 +82,8 @@ func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
 						"path", r.URL.Path,
 						"stack", string(debug.Stack()),
 					)
-					http.Error(w, "internal server error", http.StatusInternalServerError)
+					// Keep the documented JSON error envelope even on panic.
+					WriteError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 				}
 			}()
 			next.ServeHTTP(w, r)
@@ -90,8 +91,10 @@ func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// RequestLogger logs one line per request.
-func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+// RequestLogger logs one line per request. When trustProxy is true the
+// client IP is taken from X-Forwarded-For so logs reflect the real caller
+// behind a reverse proxy.
+func RequestLogger(logger *slog.Logger, trustProxy bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -102,7 +105,7 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				"path", r.URL.Path,
 				"status", sw.status,
 				"duration_ms", time.Since(start).Milliseconds(),
-				"ip", ClientIP(r, false),
+				"ip", ClientIP(r, trustProxy),
 			)
 		})
 	}

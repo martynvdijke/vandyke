@@ -60,7 +60,7 @@ func run() error {
 	ui.Register(mux)
 
 	handler := httpx.SecurityHeaders(cspFor(cfg))(
-		httpx.RequestLogger(logger)(
+		httpx.RequestLogger(logger, cfg.TrustProxy)(
 			httpx.Recover(logger)(mux),
 		),
 	)
