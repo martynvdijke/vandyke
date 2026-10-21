@@ -1,3 +1,10 @@
+## [1.0.13](https://github.com/martynvdijke/vandyke/compare/v1.0.12...v1.0.13) (2026-10-21)
+
+
+### Bug Fixes
+
+* **deps:** update module modernc.org/sqlite to v1.61.0 ([#17](https://github.com/martynvdijke/vandyke/issues/17)) ([5955b42](https://github.com/martynvdijke/vandyke/commit/5955b4246a5b872f4ff3b33aaed2d354aea130e1))
+
 ## [1.0.12](https://github.com/martynvdijke/vandyke/compare/v1.0.11...v1.0.12) (2026-10-20)
 
 ## [1.0.11](https://github.com/martynvdijke/vandyke/compare/v1.0.10...v1.0.11) (2026-10-19)
