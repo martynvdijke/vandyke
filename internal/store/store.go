@@ -30,6 +30,16 @@ var seedFS embed.FS
 // ErrNotFound is returned when an entry does not exist.
 var ErrNotFound = errors.New("entry not found")
 
+// ErrAdminExists is returned when first-run setup is attempted after an admin
+// account has already been created.
+var ErrAdminExists = errors.New("an admin account already exists")
+
+// ErrAdminNotFound is returned when an admin account does not exist.
+var ErrAdminNotFound = errors.New("admin not found")
+
+// ErrSessionNotFound is returned when a session is missing or expired.
+var ErrSessionNotFound = errors.New("session not found")
+
 const (
 	// DefaultPerPage is the page size used when a request does not specify one.
 	DefaultPerPage = 30
@@ -524,4 +534,419 @@ func scanEntry(row rowScanner) (Entry, error) {
 
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// Admin is a local or OIDC-backed administrator account.
+type Admin struct {
+	ID           int64      `json:"id"`
+	Username     string     `json:"username,omitempty"`
+	PasswordHash string     `json:"-"`
+	Email        string     `json:"email,omitempty"`
+	DisplayName  string     `json:"display_name,omitempty"`
+	OIDCIssuer   string     `json:"-"`
+	OIDCSubject  string     `json:"-"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+}
+
+// HasPassword reports whether the admin can sign in locally.
+func (a Admin) HasPassword() bool { return a.Username != "" && a.PasswordHash != "" }
+
+// IsOIDC reports whether the admin was created through OpenID Connect.
+func (a Admin) IsOIDC() bool { return a.OIDCSubject != "" }
+
+// Session is an authenticated browser session.
+type Session struct {
+	TokenHash string
+	AdminID   int64
+	CSRFToken string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// SessionInfo bundles a session with its admin.
+type SessionInfo struct {
+	Session Session
+	Admin   Admin
+}
+
+// EntryUpdate describes an administrator edit of a ledger entry.
+type EntryUpdate struct {
+	ID          int64
+	Word        string
+	Meaning     string
+	CreatedAt   time.Time
+	Photo       *Photo
+	RemovePhoto bool
+}
+
+// AdminCount returns the number of administrator accounts.
+func (s *Store) AdminCount(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count admins: %w", err)
+	}
+	return count, nil
+}
+
+// CreateFirstAdmin creates the initial local administrator. It fails with
+// ErrAdminExists if any admin already exists, closing the first-run setup race.
+func (s *Store) CreateFirstAdmin(ctx context.Context, username, passwordHash string) (Admin, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Admin{}, fmt.Errorf("begin first admin: %w", err)
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins`).Scan(&count); err != nil {
+		_ = tx.Rollback()
+		return Admin{}, fmt.Errorf("count admins: %w", err)
+	}
+	if count > 0 {
+		_ = tx.Rollback()
+		return Admin{}, ErrAdminExists
+	}
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO admins (username, password_hash) VALUES (?, ?)`, username, passwordHash)
+	if err != nil {
+		_ = tx.Rollback()
+		return Admin{}, fmt.Errorf("insert first admin: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		_ = tx.Rollback()
+		return Admin{}, fmt.Errorf("first admin id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Admin{}, fmt.Errorf("commit first admin: %w", err)
+	}
+	return s.GetAdmin(ctx, id)
+}
+
+// GetAdmin returns an admin by ID.
+func (s *Store) GetAdmin(ctx context.Context, id int64) (Admin, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, email, display_name,
+		oidc_issuer, oidc_subject, created_at, last_login_at FROM admins WHERE id = ?`, id)
+	return scanAdmin(row)
+}
+
+// GetAdminByUsername returns a local admin by username (case-insensitive).
+func (s *Store) GetAdminByUsername(ctx context.Context, username string) (Admin, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, email, display_name,
+		oidc_issuer, oidc_subject, created_at, last_login_at
+		FROM admins WHERE username = ? COLLATE NOCASE`, strings.TrimSpace(username))
+	return scanAdmin(row)
+}
+
+// UpsertOIDCAdmin returns the admin matching an OIDC identity, creating one on
+// first login and refreshing profile fields on later logins.
+func (s *Store) UpsertOIDCAdmin(ctx context.Context, issuer, subject, email, displayName string) (Admin, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Admin{}, fmt.Errorf("begin oidc admin: %w", err)
+	}
+	var id int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT id FROM admins WHERE oidc_issuer = ? AND oidc_subject = ?`, issuer, subject,
+	).Scan(&id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		res, insertErr := tx.ExecContext(ctx,
+			`INSERT INTO admins (email, display_name, oidc_issuer, oidc_subject) VALUES (?, ?, ?, ?)`,
+			email, displayName, issuer, subject)
+		if insertErr != nil {
+			_ = tx.Rollback()
+			return Admin{}, fmt.Errorf("insert oidc admin: %w", insertErr)
+		}
+		id, err = res.LastInsertId()
+		if err != nil {
+			_ = tx.Rollback()
+			return Admin{}, fmt.Errorf("oidc admin id: %w", err)
+		}
+	case err != nil:
+		_ = tx.Rollback()
+		return Admin{}, fmt.Errorf("find oidc admin: %w", err)
+	default:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE admins SET email = ?, display_name = ? WHERE id = ?`, email, displayName, id,
+		); err != nil {
+			_ = tx.Rollback()
+			return Admin{}, fmt.Errorf("update oidc admin: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Admin{}, fmt.Errorf("commit oidc admin: %w", err)
+	}
+	return s.GetAdmin(ctx, id)
+}
+
+// TouchAdmin records a successful login.
+func (s *Store) TouchAdmin(ctx context.Context, id int64, at time.Time) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE admins SET last_login_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), id,
+	); err != nil {
+		return fmt.Errorf("touch admin: %w", err)
+	}
+	return nil
+}
+
+// CreateSession stores a hashed session token.
+func (s *Store) CreateSession(ctx context.Context, session Session) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO admin_sessions (token_hash, admin_id, csrf_token, expires_at) VALUES (?, ?, ?, ?)`,
+		session.TokenHash, session.AdminID, session.CSRFToken, session.ExpiresAt.UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("create session: %w", err)
+	}
+	return nil
+}
+
+// GetSession returns a live session and its admin.
+func (s *Store) GetSession(ctx context.Context, tokenHash string) (SessionInfo, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	row := s.db.QueryRowContext(ctx, `SELECT s.token_hash, s.admin_id, s.csrf_token, s.created_at, s.expires_at,
+		a.id, a.username, a.password_hash, a.email, a.display_name, a.oidc_issuer, a.oidc_subject,
+		a.created_at, a.last_login_at
+		FROM admin_sessions s JOIN admins a ON a.id = s.admin_id
+		WHERE s.token_hash = ? AND s.expires_at > ?`, tokenHash, now)
+
+	var (
+		info      SessionInfo
+		username  sql.NullString
+		password  sql.NullString
+		created   string
+		expires   string
+		aCreated  string
+		lastLogin sql.NullString
+	)
+	if err := row.Scan(&info.Session.TokenHash, &info.Session.AdminID, &info.Session.CSRFToken,
+		&created, &expires, &info.Admin.ID, &username, &password,
+		&info.Admin.Email, &info.Admin.DisplayName, &info.Admin.OIDCIssuer,
+		&info.Admin.OIDCSubject, &aCreated, &lastLogin); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SessionInfo{}, ErrSessionNotFound
+		}
+		return SessionInfo{}, fmt.Errorf("query session: %w", err)
+	}
+	info.Admin.Username = username.String
+	info.Admin.PasswordHash = password.String
+	var err error
+	if info.Session.CreatedAt, err = time.Parse(time.RFC3339, created); err != nil {
+		return SessionInfo{}, fmt.Errorf("parse session created_at: %w", err)
+	}
+	if info.Session.ExpiresAt, err = time.Parse(time.RFC3339, expires); err != nil {
+		return SessionInfo{}, fmt.Errorf("parse session expires_at: %w", err)
+	}
+	if info.Admin.CreatedAt, err = time.Parse(time.RFC3339, aCreated); err != nil {
+		return SessionInfo{}, fmt.Errorf("parse admin created_at: %w", err)
+	}
+	if lastLogin.Valid {
+		if t, err := time.Parse(time.RFC3339, lastLogin.String); err == nil {
+			t = t.UTC()
+			info.Admin.LastLoginAt = &t
+		}
+	}
+	return info, nil
+}
+
+// DeleteSession removes one session.
+func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE token_hash = ?`, tokenHash); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
+}
+
+// DeleteExpiredSessions removes sessions whose expiry has passed.
+func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM admin_sessions WHERE expires_at <= ?`, time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		return fmt.Errorf("delete expired sessions: %w", err)
+	}
+	return nil
+}
+
+// UpdateEntry applies an administrator edit, optionally replacing or removing
+// the photo, and returns the updated entry.
+func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, error) {
+	update.Word = strings.TrimSpace(update.Word)
+	update.Meaning = strings.TrimSpace(update.Meaning)
+	if update.Photo != nil && update.RemovePhoto {
+		return Entry{}, errors.New("choose either a new photo or remove the existing one")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Entry{}, fmt.Errorf("begin entry update: %w", err)
+	}
+	var (
+		createdAt string
+		hasPhoto  bool
+	)
+	if err := tx.QueryRowContext(ctx, `SELECT created_at,
+		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
+		FROM entries e WHERE e.id = ?`, update.ID).Scan(&createdAt, &hasPhoto); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return Entry{}, ErrNotFound
+		}
+		return Entry{}, fmt.Errorf("load entry: %w", err)
+	}
+	if update.CreatedAt.IsZero() {
+		if update.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
+			_ = tx.Rollback()
+			return Entry{}, fmt.Errorf("parse created_at %q: %w", createdAt, err)
+		}
+	}
+	if update.Photo != nil {
+		hasPhoto = true
+	}
+	if update.RemovePhoto {
+		hasPhoto = false
+	}
+	if err := ValidateEntry(update.Word, update.Meaning, hasPhoto); err != nil {
+		_ = tx.Rollback()
+		return Entry{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE entries SET word = ?, meaning = ?, created_at = ? WHERE id = ?`,
+		update.Word, update.Meaning, update.CreatedAt.UTC().Format(time.RFC3339), update.ID,
+	); err != nil {
+		_ = tx.Rollback()
+		return Entry{}, fmt.Errorf("update entry: %w", err)
+	}
+	switch {
+	case update.Photo != nil:
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(entry_id) DO UPDATE SET content_type = excluded.content_type,
+				data = excluded.data, sha256 = excluded.sha256, size = excluded.size`,
+			update.ID, update.Photo.ContentType, update.Photo.Data, update.Photo.SHA256, update.Photo.Size,
+		); err != nil {
+			_ = tx.Rollback()
+			return Entry{}, fmt.Errorf("replace entry photo: %w", err)
+		}
+	case update.RemovePhoto:
+		if _, err := tx.ExecContext(ctx, `DELETE FROM entry_photos WHERE entry_id = ?`, update.ID); err != nil {
+			_ = tx.Rollback()
+			return Entry{}, fmt.Errorf("remove entry photo: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Entry{}, fmt.Errorf("commit entry update: %w", err)
+	}
+	return s.GetEntry(ctx, update.ID)
+}
+
+// DeleteEntries removes entries and their photos, returning the number deleted.
+func (s *Store) DeleteEntries(ctx context.Context, ids []int64) (int64, error) {
+	seen := make(map[int64]bool, len(ids))
+	clean := make([]any, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		clean = append(clean, id)
+	}
+	if len(clean) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(clean)), ",")
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin entry delete: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE id IN (`+placeholders+`)`, clean...)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("delete entries: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("deleted rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit entry delete: %w", err)
+	}
+	return n, nil
+}
+
+// GetSettings returns all persisted runtime settings.
+func (s *Store) GetSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings`)
+	if err != nil {
+		return nil, fmt.Errorf("query settings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	values := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, fmt.Errorf("scan setting: %w", err)
+		}
+		values[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate settings: %w", err)
+	}
+	return values, nil
+}
+
+// SetSettings upserts runtime settings in one transaction.
+func (s *Store) SetSettings(ctx context.Context, values map[string]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin settings update: %w", err)
+	}
+	for key, value := range values {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO settings (key, value) VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+				updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')`,
+			key, value,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("set setting %q: %w", key, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit settings: %w", err)
+	}
+	return nil
+}
+
+func scanAdmin(row rowScanner) (Admin, error) {
+	var (
+		admin     Admin
+		username  sql.NullString
+		password  sql.NullString
+		created   string
+		lastLogin sql.NullString
+	)
+	if err := row.Scan(&admin.ID, &username, &password, &admin.Email,
+		&admin.DisplayName, &admin.OIDCIssuer, &admin.OIDCSubject, &created, &lastLogin); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Admin{}, ErrAdminNotFound
+		}
+		return Admin{}, err
+	}
+	admin.Username = username.String
+	admin.PasswordHash = password.String
+	var err error
+	if admin.CreatedAt, err = time.Parse(time.RFC3339, created); err != nil {
+		return Admin{}, fmt.Errorf("parse admin created_at: %w", err)
+	}
+	if lastLogin.Valid {
+		if t, err := time.Parse(time.RFC3339, lastLogin.String); err == nil {
+			t = t.UTC()
+			admin.LastLoginAt = &t
+		}
+	}
+	return admin, nil
 }

@@ -45,11 +45,26 @@ func New(perHour float64, burst int) *Limiter {
 	if burst < 1 {
 		burst = 1
 	}
+	return newLimiter(perHour/3600, 3600/perHour, burst)
+}
+
+// NewPerMinute creates a limiter refilling perMinute tokens for each key.
+func NewPerMinute(perMinute float64, burst int) *Limiter {
+	if perMinute <= 0 {
+		perMinute = 1
+	}
+	if burst < 1 {
+		burst = 1
+	}
+	return newLimiter(perMinute/60, 60/perMinute, burst)
+}
+
+func newLimiter(tokensPerSecond, refillSeconds float64, burst int) *Limiter {
 	return &Limiter{
 		buckets:   make(map[string]*bucket),
-		limit:     rate.Limit(perHour / 3600),
+		limit:     rate.Limit(tokensPerSecond),
 		burst:     burst,
-		refillMin: 3600 / perHour,
+		refillMin: refillSeconds,
 		now:       time.Now,
 		idle:      24 * time.Hour,
 		lastSweep: time.Now(),

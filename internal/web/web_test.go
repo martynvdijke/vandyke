@@ -30,7 +30,7 @@ func newTestWeb(t *testing.T, umami config.Umami, limiter *ratelimit.Limiter) *h
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	w, err := New(st, limiter, umami, false, discardLogger())
+	w, err := New(st, limiter, func() config.Umami { return umami }, false, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}

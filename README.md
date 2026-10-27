@@ -4,8 +4,9 @@ The LANCo misspelling ledger — a modern, self-hosted rebuild of
 [vandyke.thor.edu](https://vandyke.thor.edu/).
 
 One self-contained Go binary: SQLite storage, a server-rendered HTMX interface,
-a JSON API, per-IP rate limiting and optional self-hosted Umami analytics.
-No JavaScript build step, no external services required.
+a JSON API, per-IP rate limiting, an admin ledger with local or OIDC login, and
+optional self-hosted Umami analytics. No JavaScript build step, no external
+services required.
 
 ## Features
 
@@ -20,10 +21,16 @@ No JavaScript build step, no external services required.
 - **Add entries from the web or the API** — text entries or photos of a
   misspelling, protected by a per-IP token bucket (default: 10 additions per
   hour, burst of 5).
-- **Optional self-hosted Umami** — set two environment variables and the
-  tracker is injected, with page views and custom events (`search`,
-  `entry-added`, `theme-toggle`). No analytics is loaded otherwise, and the CSP
-  is adjusted automatically.
+- **Admin ledger** — sign in to edit every field, replace or remove photos,
+  correct logged dates, and delete entries individually or in bulk. Public
+  additions stay open; only editing and deletion require an admin.
+- **First-run setup and OIDC** — create the first local admin at `/admin/setup`;
+  optionally add OpenID Connect for single sign-on. Login attempts are
+  rate-limited and sessions are stored in SQLite with CSRF protection.
+- **Optional self-hosted Umami** — configure the tracker through the admin
+  settings page or environment variables. Page views and custom events
+  (`search`, `entry-added`, `theme-toggle`) are sent only when enabled; the CSP
+  is adjusted at runtime.
 
 ## Quickstart
 
@@ -74,6 +81,13 @@ Compose). See [`.env.example`](.env.example).
 | `UMAMI_URL` | *(empty)* | Full URL of the self-hosted tracker, e.g. `https://umami.example.com/script.js`. |
 | `UMAMI_WEBSITE_ID` | *(empty)* | Umami website UUID. Analytics is enabled only when both are set. |
 | `UMAMI_DOMAINS` | *(empty)* | Optional comma-separated hostnames passed to `data-domains`. |
+| `ADMIN_SETUP_TOKEN` | *(empty)* | Optional token required by `/admin/setup`. Without it the first visitor can claim a fresh instance. |
+| `ADMIN_LOGIN_RATE_PER_MINUTE` | `10` | Login attempts allowed per IP per minute. |
+| `ADMIN_LOGIN_RATE_BURST` | `5` | Short-term login burst allowance per IP. |
+| `OIDC_ISSUER` | *(empty)* | OpenID Connect issuer URL. Enables OIDC when set with a client ID. |
+| `OIDC_CLIENT_ID` | *(empty)* | OIDC client ID. |
+| `OIDC_CLIENT_SECRET` | *(empty)* | OIDC client secret, if the provider requires one. |
+| `OIDC_REDIRECT_URL` | *(derived)* | Fixed callback URL, e.g. `https://vandyke.example.com/admin/oidc/callback`. |
 
 ## API
 
@@ -112,6 +126,33 @@ fields empty, so a photo alone is a valid entry. Photos must be JPEG, PNG, GIF
 or WebP and at most 10 MB; they are stored in SQLite and returned as `photo_url`
 on the entry. Duplicates are allowed, exactly as on the original site.
 
+## Admin and authentication
+
+The ledger is public to read and to add to. Editing and deleting require an
+admin account at `/admin`.
+
+1. Open `/admin/setup` on a fresh database and create the first local admin.
+   If `ADMIN_SETUP_TOKEN` is set, enter that token too. The setup page closes
+   permanently once an admin exists.
+2. Sign in at `/admin/login`. Sessions last seven days, are stored in SQLite,
+   and are protected by an `HttpOnly`, `SameSite=Lax` cookie and a CSRF token
+   on every mutating form.
+3. Edit an entry with **Edit** in the admin ledger. Word, meaning, logged date
+   and photo can all be changed; deleting an entry also deletes its photo.
+
+### OIDC
+
+Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and optionally `OIDC_CLIENT_SECRET` and
+`OIDC_REDIRECT_URL`. The provider must expose standard discovery metadata
+(`/.well-known/openid-configuration`) and support the authorization-code flow
+with PKCE. The default callback is `<request scheme and host>/admin/oidc/callback`;
+register that URL with your provider unless you set `OIDC_REDIRECT_URL`.
+
+Any identity the provider successfully authenticates is auto-provisioned as an
+admin on first login. **The provider's own access policy is therefore the only
+boundary** — configure it accordingly. The first local admin still has to be
+created at `/admin/setup` before OIDC sign-in is available.
+
 ## Umami analytics
 
 vanDyke only injects the tracker script — you run Umami yourself:
@@ -120,12 +161,16 @@ vanDyke only injects the tracker script — you run Umami yourself:
    [official Docker setup](https://umami.is/docs/install) (Umami's own docs
    cover the database and reverse proxy).
 2. Add a website in the Umami dashboard and copy its UUID.
-3. Set `UMAMI_URL` (the full `…/script.js` URL) and `UMAMI_WEBSITE_ID`.
+3. Set `UMAMI_URL` (the full `…/script.js` URL) and `UMAMI_WEBSITE_ID`, or
+   sign in and use **Analytics settings** at `/admin/settings`.
 4. Optionally restrict tracking with `UMAMI_DOMAINS`.
 
-The Content-Security-Policy automatically allows the tracker origin. Without
-both variables no script is loaded and no request leaves the page. Events sent:
-`search` (debounced query, ≥ 2 characters), `entry-added`, `theme-toggle`.
+Values saved in the admin interface override the environment per field; clear
+a field to fall back to its `UMAMI_*` variable. The Content-Security-Policy
+automatically allows the effective tracker origin and updates when settings
+change. Without a URL and website ID no script is loaded and no request leaves
+the page. Events sent: `search` (debounced query, ≥ 2 characters),
+`entry-added`, `theme-toggle`.
 
 ## Data provenance
 
@@ -143,21 +188,27 @@ diverge.
 cmd/vandyke/           main: config, HTTP server, graceful shutdown
 internal/config/       environment configuration
 internal/store/        SQLite store, migrations, embedded seed data
+internal/auth/         password hashing, sessions, OIDC
+internal/admin/        authenticated admin interface under /admin
+internal/settings/     runtime Umami settings with env fallback
 internal/ratelimit/    per-IP token bucket
 internal/httpx/        shared HTTP helpers (client IP, JSON envelopes, logging)
 internal/httpapi/      REST API under /api/v1
-internal/web/          HTML interface: templates, CSS, JS, fonts
+internal/web/          public HTML interface: templates, CSS, JS, fonts
 scripts/               one-off seed scraper and font fetcher
 ```
 
 ## Security notes
 
-The ledger is intentionally open, like the original: anyone who can reach the
-site can add an entry, and there is no authentication, editing or deletion.
-Rate limiting is the only abuse control. Put it behind your intranet or a
-reverse proxy with authentication if that is not what you want. Responses carry
-`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` and a
-CSP tailored to the enabled features.
+Reading and adding entries remain intentionally open, like the original: anyone
+who can reach the site can add an entry. Editing and deleting require an admin
+login, and login attempts are rate-limited. New instances should either set
+`ADMIN_SETUP_TOKEN` or be claimed at `/admin/setup` before they are exposed.
+OIDC deployments inherit the provider's access policy because any authenticated
+identity becomes an admin.
+
+Responses carry `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`
+and a CSP tailored to the effective Umami settings.
 
 ## Testing
 
@@ -166,9 +217,11 @@ go test ./...
 ```
 
 The suite covers the store (seeding, search with escaped wildcards, sorting,
-pagination, validation, stats), the rate limiter, the JSON API, and the web
-layer (partial rendering, HTMX flows, no-JS flows, rate-limit errors, Umami
-injection, cache headers).
+pagination, validation, stats, admin/session lifecycle, entry edits and bulk
+deletes, settings), password hashing and OIDC discovery/token verification, the
+rate limiter, the JSON API, the admin flows (setup, login, CSRF, edit, delete,
+Umami settings), and the public web layer (partial rendering, HTMX flows, no-JS
+flows, rate-limit errors, Umami injection, cache headers).
 
 ## CI, releases and updates
 

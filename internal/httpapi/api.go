@@ -190,9 +190,15 @@ func (a *API) handleGetEntryPhoto(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	etag := `"` + photo.SHA256 + `"`
+	rw.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		rw.WriteHeader(http.StatusNotModified)
+		return
+	}
 	rw.Header().Set("Content-Type", photo.ContentType)
 	rw.Header().Set("Content-Length", strconv.Itoa(len(photo.Data)))
-	rw.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	rw.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
 	rw.Header().Set("X-Content-Type-Options", "nosniff")
 	rw.WriteHeader(http.StatusOK)
 	if _, err := rw.Write(photo.Data); err != nil {

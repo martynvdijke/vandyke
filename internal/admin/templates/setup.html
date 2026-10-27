@@ -1,0 +1,35 @@
+{{define "setup"}}{{template "admin-head" .}}
+<div class="admin-auth">
+  <section class="admin-card">
+    <p class="eyebrow">First-run setup</p>
+    <h1>Create the first admin</h1>
+    <p class="admin-lede">No administrator exists yet. This page is available until the first account is created.</p>
+    <p class="admin-warning">Only do this on an instance you control and before exposing it publicly.</p>
+    {{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/admin/setup" class="admin-form">
+      {{if .TokenRequired}}
+      <label class="field">
+        <span class="field-label">Setup token</span>
+        <input type="password" name="token" value="{{.Token}}" autocomplete="off" required>
+        <span class="field-hint">The value of <code>ADMIN_SETUP_TOKEN</code>.</span>
+      </label>
+      {{end}}
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input type="text" name="username" value="{{.Username}}" autocomplete="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" required autofocus>
+        <span class="field-hint">Letters, numbers, dots, dashes or underscores.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" name="password" autocomplete="new-password" minlength="10" maxlength="200" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Confirm password</span>
+        <input type="password" name="confirm" autocomplete="new-password" minlength="10" maxlength="200" required>
+      </label>
+      <button class="btn btn-primary" type="submit">Create admin</button>
+    </form>
+    <p class="field-hint admin-auth-foot"><a href="/">← Back to the ledger</a></p>
+  </section>
+</div>
+{{template "admin-foot" .}}{{end}}

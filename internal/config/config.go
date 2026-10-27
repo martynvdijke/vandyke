@@ -16,6 +16,17 @@ type Umami struct {
 	Domains   string
 }
 
+// OIDC holds optional OpenID Connect settings.
+type OIDC struct {
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+}
+
+// Enabled reports whether OIDC login is configured.
+func (o OIDC) Enabled() bool { return o.Issuer != "" && o.ClientID != "" }
+
 // Enabled reports whether the tracker script should be injected.
 func (u Umami) Enabled() bool { return u.URL != "" && u.WebsiteID != "" }
 
@@ -33,23 +44,34 @@ func (u Umami) Origin() string {
 
 // Config is the fully resolved application configuration.
 type Config struct {
-	Port                string
-	DBPath              string
-	TrustProxy          bool
-	AddRateLimitPerHour float64
-	AddRateLimitBurst   int
-	Umami               Umami
+	Port                    string
+	DBPath                  string
+	TrustProxy              bool
+	AddRateLimitPerHour     float64
+	AddRateLimitBurst       int
+	AdminSetupToken         string
+	AdminLoginRatePerMinute float64
+	AdminLoginRateBurst     int
+	Umami                   Umami
+	OIDC                    OIDC
 }
 
 // Load reads configuration from the environment, applying defaults.
 func Load() (Config, error) {
 	cfg := Config{
-		Port:   getenv("PORT", "8080"),
-		DBPath: getenv("DB_PATH", "./data/vandyke.db"),
+		Port:            getenv("PORT", "8080"),
+		DBPath:          getenv("DB_PATH", "./data/vandyke.db"),
+		AdminSetupToken: os.Getenv("ADMIN_SETUP_TOKEN"),
 		Umami: Umami{
 			URL:       os.Getenv("UMAMI_URL"),
 			WebsiteID: os.Getenv("UMAMI_WEBSITE_ID"),
 			Domains:   os.Getenv("UMAMI_DOMAINS"),
+		},
+		OIDC: OIDC{
+			Issuer:       os.Getenv("OIDC_ISSUER"),
+			ClientID:     os.Getenv("OIDC_CLIENT_ID"),
+			ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+			RedirectURL:  os.Getenv("OIDC_REDIRECT_URL"),
 		},
 	}
 
@@ -61,6 +83,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.AddRateLimitBurst, err = getenvInt("ADD_RATE_LIMIT_BURST", 5); err != nil {
+		return Config{}, err
+	}
+	if cfg.AdminLoginRatePerMinute, err = getenvFloat("ADMIN_LOGIN_RATE_PER_MINUTE", 10); err != nil {
+		return Config{}, err
+	}
+	if cfg.AdminLoginRateBurst, err = getenvInt("ADMIN_LOGIN_RATE_BURST", 5); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

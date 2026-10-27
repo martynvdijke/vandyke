@@ -34,14 +34,14 @@ type Web struct {
 	store      *store.Store
 	limiter    *ratelimit.Limiter
 	trustProxy bool
-	umami      config.Umami
+	umami      func() config.Umami
 	logger     *slog.Logger
 	tmpl       *template.Template
 	assets     http.Handler
 }
 
 // New parses templates and prepares the static asset handler.
-func New(st *store.Store, limiter *ratelimit.Limiter, umami config.Umami, trustProxy bool, logger *slog.Logger) (*Web, error) {
+func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, trustProxy bool, logger *slog.Logger) (*Web, error) {
 	tmpl, err := template.New("vandyke").Funcs(template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			if t.IsZero() {
@@ -201,7 +201,7 @@ func (w *Web) handleLedger(rw http.ResponseWriter, r *http.Request) {
 		w.renderInternalError(rw, err)
 		return
 	}
-	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami, Ledger: ledger})
+	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger})
 }
 
 func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
@@ -287,7 +287,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		w.renderInternalError(rw, err)
 		return
 	}
-	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami, Ledger: ledger})
+	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger})
 }
 
 func (w *Web) buildPage(r *http.Request) (pageData, error) {
@@ -307,7 +307,7 @@ func (w *Web) buildPage(r *http.Request) (pageData, error) {
 	}
 	query := r.URL.Query()
 	return pageData{
-		Umami:     w.umami,
+		Umami:     w.umami(),
 		Stats:     stats,
 		SpanYears: span,
 		Ledger:    ledger,

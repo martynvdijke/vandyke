@@ -12,10 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"vandyke.thor.edu/vandyke/internal/admin"
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpapi"
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
+	"vandyke.thor.edu/vandyke/internal/settings"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/web"
 )
@@ -50,16 +52,27 @@ func run() error {
 
 	limiter := ratelimit.New(cfg.AddRateLimitPerHour, cfg.AddRateLimitBurst)
 	api := httpapi.New(st, limiter, cfg.TrustProxy, logger)
-	ui, err := web.New(st, limiter, cfg.Umami, cfg.TrustProxy, logger)
+	settingsStore, err := settings.New(ctx, st, cfg.Umami)
+	if err != nil {
+		return fmt.Errorf("load settings: %w", err)
+	}
+	ui, err := web.New(st, limiter, settingsStore.Current, cfg.TrustProxy, logger)
 	if err != nil {
 		return err
+	}
+	adminUI, err := admin.New(ctx, st, settingsStore, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("admin: %w", err)
 	}
 
 	mux := http.NewServeMux()
 	api.Register(mux)
 	ui.Register(mux)
+	adminUI.Register(mux)
 
-	handler := httpx.SecurityHeaders(cspFor(cfg))(
+	handler := httpx.SecurityHeadersFunc(func(*http.Request) string {
+		return cspFor(settingsStore.Current())
+	})(
 		httpx.RequestLogger(logger, cfg.TrustProxy)(
 			httpx.Recover(logger)(mux),
 		),
@@ -79,7 +92,9 @@ func run() error {
 			"version", Version,
 			"addr", srv.Addr,
 			"db", cfg.DBPath,
-			"umami", cfg.Umami.Enabled(),
+			"umami", settingsStore.Current().Enabled(),
+			"admin_setup_token", cfg.AdminSetupToken != "",
+			"oidc", cfg.OIDC.Enabled(),
 			"rate_limit_per_hour", cfg.AddRateLimitPerHour,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -98,10 +113,10 @@ func run() error {
 
 // cspFor builds a Content-Security-Policy that permits the configured
 // self-hosted Umami origin when analytics is enabled.
-func cspFor(cfg config.Config) string {
+func cspFor(u config.Umami) string {
 	scriptSrc := "'self'"
 	connectSrc := "'self'"
-	if origin := cfg.Umami.Origin(); origin != "" {
+	if origin := u.Origin(); origin != "" {
 		scriptSrc += " " + origin
 		connectSrc += " " + origin
 	}

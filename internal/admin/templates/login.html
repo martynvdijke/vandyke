@@ -1,0 +1,27 @@
+{{define "login"}}{{template "admin-head" .}}
+<div class="admin-auth">
+  <section class="admin-card">
+    <p class="eyebrow">Administration</p>
+    <h1>Sign in</h1>
+    <p class="admin-lede">Edit and remove ledger entries. Adding entries stays open to everyone.</p>
+    {{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/admin/login" class="admin-form">
+      <input type="hidden" name="next" value="{{.Next}}">
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input type="text" name="username" value="{{.Username}}" autocomplete="username" required autofocus>
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn btn-primary" type="submit">Sign in</button>
+    </form>
+    {{if .OIDC}}
+    <div class="admin-divider"><span>or</span></div>
+    <a class="btn btn-ghost admin-oidc" href="/admin/oidc/start">Continue with OpenID Connect</a>
+    {{end}}
+    <p class="field-hint admin-auth-foot"><a href="/">← Back to the ledger</a></p>
+  </section>
+</div>
+{{template "admin-foot" .}}{{end}}

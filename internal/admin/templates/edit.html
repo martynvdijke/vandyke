@@ -1,0 +1,64 @@
+{{define "admin-edit"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Edit entry {{entryNo .Entry.ID}}</p>
+    <h1>{{if .Entry.Word}}{{.Entry.Word}}{{else}}Photo entry{{end}}</h1>
+    <p class="admin-lede">Logged {{formatDateTime .Entry.CreatedAt}}. Changes are saved immediately.</p>
+  </div>
+  <a class="btn btn-ghost" href="/admin">← Back to entries</a>
+</div>
+
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="admin-card admin-edit-card">
+  <form method="post" action="/admin/entries/{{.Entry.ID}}" enctype="multipart/form-data" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-grid">
+      <label class="field">
+        <span class="field-label">The misspelling</span>
+        <input type="text" name="word" value="{{.FormWord}}" maxlength="200" autocomplete="off">
+        <span class="field-hint">Optional when a photo is present.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">It should have been</span>
+        <input type="text" name="meaning" value="{{.FormMeaning}}" maxlength="500" autocomplete="off">
+        <span class="field-hint">Optional when a photo is present.</span>
+      </label>
+    </div>
+    <label class="field field-date">
+      <span class="field-label">Logged date</span>
+      <input type="date" name="date" value="{{.FormDate}}" required>
+      <span class="field-hint">The time of day is preserved from the original entry.</span>
+    </label>
+
+    {{if .Entry.PhotoURL}}
+    <div class="admin-current-photo">
+      <span class="field-label">Current photo</span>
+      <a class="admin-photo-large" href="{{.Entry.PhotoURL}}" target="_blank" rel="noopener"><img src="{{.Entry.PhotoURL}}" alt="Current photo for entry {{entryNo .Entry.ID}}"></a>
+      <label class="admin-check"><input type="checkbox" name="remove_photo" value="1"{{if .FormRemove}} checked{{end}}> <span>Remove this photo</span></label>
+    </div>
+    {{end}}
+
+    <label class="field">
+      <span class="field-label">Replace photo <span class="field-optional">optional</span></span>
+      <input type="file" name="photo" id="edit-photo" accept="image/jpeg,image/png,image/gif,image/webp">
+      <span class="field-hint">JPEG, PNG, GIF or WebP, up to 10&nbsp;MB. Uploading a new photo replaces the current one.</span>
+    </label>
+    <div id="edit-photo-preview" class="photo-preview" hidden>
+      <img id="edit-photo-preview-img" alt="Selected photo preview">
+    </div>
+
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Save changes</button>
+      <a class="btn btn-ghost" href="/admin">Cancel</a>
+    </div>
+  </form>
+
+  <form method="post" action="/admin/entries/delete" class="admin-delete-form" data-confirm-delete>
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="ids" value="{{.Entry.ID}}">
+    <button class="btn btn-danger" type="submit">Delete entry</button>
+  </form>
+</section>
+{{template "admin-foot" .}}{{end}}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -410,5 +411,154 @@ func TestStatsOnEmptyLedger(t *testing.T) {
 	}
 	if stats.FirstEntryAt != nil || stats.LastEntryAt != nil {
 		t.Errorf("empty stats timestamps = %v / %v, want nil", stats.FirstEntryAt, stats.LastEntryAt)
+	}
+}
+
+func TestAdminAndSessionLifecycle(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	count, err := st.AdminCount(ctx)
+	if err != nil || count != 0 {
+		t.Fatalf("AdminCount = %d, %v; want 0", count, err)
+	}
+	admin, err := st.CreateFirstAdmin(ctx, "Owner", "hash")
+	if err != nil {
+		t.Fatalf("CreateFirstAdmin: %v", err)
+	}
+	if admin.Username != "owner" || !admin.HasPassword() {
+		t.Fatalf("admin = %+v", admin)
+	}
+	if _, err := st.CreateFirstAdmin(ctx, "other", "hash"); !errors.Is(err, ErrAdminExists) {
+		t.Fatalf("second CreateFirstAdmin error = %v, want ErrAdminExists", err)
+	}
+	got, err := st.GetAdminByUsername(ctx, "OWNER")
+	if err != nil || got.ID != admin.ID {
+		t.Fatalf("GetAdminByUsername = %+v, %v", got, err)
+	}
+	if err := st.TouchAdmin(ctx, admin.ID, time.Now()); err != nil {
+		t.Fatalf("TouchAdmin: %v", err)
+	}
+
+	now := time.Now().UTC()
+	session := Session{
+		TokenHash: "token-hash",
+		AdminID:   admin.ID,
+		CSRFToken: "csrf",
+		CreatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := st.CreateSession(ctx, session); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	info, err := st.GetSession(ctx, "token-hash")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if info.Admin.ID != admin.ID || info.Session.CSRFToken != "csrf" {
+		t.Fatalf("session info = %+v", info)
+	}
+	if err := st.DeleteSession(ctx, "token-hash"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := st.GetSession(ctx, "token-hash"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("GetSession after delete = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestOIDCAdminUpsert(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	first, err := st.UpsertOIDCAdmin(ctx, "https://id.example.com", "sub-1", "a@example.com", "Alice")
+	if err != nil {
+		t.Fatalf("UpsertOIDCAdmin: %v", err)
+	}
+	second, err := st.UpsertOIDCAdmin(ctx, "https://id.example.com", "sub-1", "b@example.com", "Alice B")
+	if err != nil {
+		t.Fatalf("UpsertOIDCAdmin again: %v", err)
+	}
+	if first.ID != second.ID || second.Email != "b@example.com" || second.DisplayName != "Alice B" {
+		t.Fatalf("upsert did not update identity: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestUpdateEntryFieldsAndPhoto(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	entry, err := st.CreateEntry(ctx, "wrong", "right", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	when := time.Date(2019, 4, 5, 12, 30, 0, 0, time.UTC)
+	updated, err := st.UpdateEntry(ctx, EntryUpdate{
+		ID: entry.ID, Word: " wrong2 ", Meaning: " right2 ", CreatedAt: when,
+	})
+	if err != nil {
+		t.Fatalf("UpdateEntry: %v", err)
+	}
+	if updated.Word != "wrong2" || updated.Meaning != "right2" || !updated.CreatedAt.Equal(when) {
+		t.Fatalf("updated = %+v", updated)
+	}
+
+	photo, err := NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	updated, err = st.UpdateEntry(ctx, EntryUpdate{ID: entry.ID, Photo: photo})
+	if err != nil {
+		t.Fatalf("UpdateEntry photo: %v", err)
+	}
+	if updated.PhotoURL == "" {
+		t.Fatal("photo_url missing after update")
+	}
+	if _, err := st.GetEntryPhoto(ctx, entry.ID); err != nil {
+		t.Fatalf("GetEntryPhoto: %v", err)
+	}
+
+	updated, err = st.UpdateEntry(ctx, EntryUpdate{ID: entry.ID, Word: "wrong2", Meaning: "right2", RemovePhoto: true})
+	if err != nil {
+		t.Fatalf("UpdateEntry remove photo: %v", err)
+	}
+	if updated.PhotoURL != "" {
+		t.Fatalf("photo_url = %q after removal", updated.PhotoURL)
+	}
+}
+
+func TestDeleteEntriesCascadeAndSettings(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	photo, err := NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(ctx, "", "", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	n, err := st.DeleteEntries(ctx, []int64{entry.ID, entry.ID, 0})
+	if err != nil {
+		t.Fatalf("DeleteEntries: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("deleted = %d, want 1", n)
+	}
+	if _, err := st.GetEntryPhoto(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("photo after delete = %v, want ErrNotFound", err)
+	}
+
+	if err := st.SetSettings(ctx, map[string]string{"umami.url": "https://u.example/script.js"}); err != nil {
+		t.Fatalf("SetSettings: %v", err)
+	}
+	values, err := st.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if values["umami.url"] != "https://u.example/script.js" {
+		t.Fatalf("settings = %v", values)
 	}
 }

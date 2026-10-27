@@ -1,0 +1,95 @@
+{{define "admin-index"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Administration</p>
+    <h1>Ledger entries</h1>
+    <p class="admin-lede">Edit any field, replace or remove photos, and delete entries. Public additions stay open.</p>
+  </div>
+  <a class="btn btn-primary" href="/?add=1">Add public entry</a>
+</div>
+{{template "admin-flash" .}}
+{{template "admin-entries" .}}
+{{template "admin-foot" .}}{{end}}
+
+{{define "admin-entries"}}
+<section id="admin-ledger" class="admin-ledger">
+  <form class="admin-toolbar" action="/admin" method="get"
+        hx-get="/admin/entries" hx-target="#admin-ledger" hx-swap="outerHTML"
+        hx-trigger="submit, input changed delay:300ms, search, change">
+    <input type="hidden" name="sort" value="{{.Ledger.Sort}}">
+    <input type="hidden" name="order" value="{{.Ledger.Order}}">
+    <label class="searchbox">
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5 L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input type="search" name="q" value="{{.Ledger.Q}}" placeholder="Search entries…" autocomplete="off" aria-label="Search entries">
+    </label>
+    <label class="pagesize">
+      <span>Rows</span>
+      <select name="per_page" aria-label="Entries per page">
+        <option value="30"{{if eq .Ledger.PerPage 30}} selected{{end}}>30</option>
+        <option value="50"{{if eq .Ledger.PerPage 50}} selected{{end}}>50</option>
+        <option value="100"{{if eq .Ledger.PerPage 100}} selected{{end}}>100</option>
+      </select>
+    </label>
+    <noscript><button class="btn btn-primary btn-small" type="submit">Search</button></noscript>
+  </form>
+
+  <p class="admin-count">{{if .Ledger.Total}}Showing <strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong>{{else}}No entries{{end}}{{if .Ledger.Q}} for “{{.Ledger.Q}}”{{end}}</p>
+
+  {{if .Ledger.Entries}}
+  <form id="bulk-form" method="post" action="/admin/entries/delete" data-bulk-form>
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-bulkbar">
+      <label class="admin-check"><input type="checkbox" data-select-all> <span>Select all</span></label>
+      <button class="btn btn-danger btn-small" type="submit" data-bulk-delete>Delete selected</button>
+    </div>
+    <div class="admin-table" role="table" aria-label="Ledger administration">
+      <div class="admin-row admin-row-head" role="row">
+        <span class="admin-col-check" role="columnheader"><span class="sr-only">Select</span></span>
+        <span class="admin-col-no" role="columnheader">No.</span>
+        <a class="admin-col-word" role="columnheader" href="{{.Ledger.SortHref "word"}}" hx-get="{{.Ledger.SortHX "word"}}" hx-target="#admin-ledger" hx-swap="outerHTML">Misspelling <span class="sort-mark">{{.Ledger.SortMark "word"}}</span></a>
+        <a class="admin-col-meaning" role="columnheader" href="{{.Ledger.SortHref "meaning"}}" hx-get="{{.Ledger.SortHX "meaning"}}" hx-target="#admin-ledger" hx-swap="outerHTML">Correction <span class="sort-mark">{{.Ledger.SortMark "meaning"}}</span></a>
+        <a class="admin-col-date" role="columnheader" href="{{.Ledger.SortHref "created_at"}}" hx-get="{{.Ledger.SortHX "created_at"}}" hx-target="#admin-ledger" hx-swap="outerHTML">Logged <span class="sort-mark">{{.Ledger.SortMark "created_at"}}</span></a>
+        <span class="admin-col-actions" role="columnheader">Actions</span>
+      </div>
+      <ol class="admin-rows" role="rowgroup">
+        {{range $e := .Ledger.Entries}}
+        <li class="admin-row" id="entry-{{$e.ID}}" role="row">
+          <span class="admin-col-check" role="cell"><input type="checkbox" name="ids" value="{{$e.ID}}" aria-label="Select entry {{entryNo $e.ID}}"></span>
+          <span class="admin-col-no" role="cell">{{entryNo $e.ID}}</span>
+          <span class="admin-col-word" role="cell">
+            {{if $e.PhotoURL}}<a class="entry-photo admin-thumb" href="{{$e.PhotoURL}}" target="_blank" rel="noopener" title="Open photo"><img src="{{$e.PhotoURL}}" alt="" loading="lazy" decoding="async"></a>{{end}}
+            {{if $e.Word}}<span class="wrong">{{$e.Word}}</span>{{else}}<span class="photo-note">photo entry</span>{{end}}
+          </span>
+          <span class="admin-col-meaning" role="cell">{{if $e.Meaning}}<span class="arrow" aria-hidden="true">→</span><span class="right">{{$e.Meaning}}</span>{{else}}<span class="photo-note">—</span>{{end}}</span>
+          <time class="admin-col-date" role="cell" datetime="{{$e.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate $e.CreatedAt}}</time>
+          <span class="admin-col-actions" role="cell">
+            <a class="btn btn-ghost btn-small" href="/admin/entries/{{$e.ID}}/edit">Edit</a>
+            <button class="btn btn-danger btn-small" type="button" data-delete-id="{{$e.ID}}" data-delete-label="{{entryNo $e.ID}}">Delete</button>
+          </span>
+        </li>
+        {{end}}
+      </ol>
+    </div>
+  </form>
+
+  {{if gt .Ledger.Pages 1}}
+  <nav class="pager" aria-label="Admin pages">
+    {{if gt .Ledger.Page 1}}
+      <a class="page-btn page-edge" href="{{.Ledger.PageHref (dec .Ledger.Page)}}" hx-get="{{.Ledger.PageHX (dec .Ledger.Page)}}" hx-target="#admin-ledger" hx-swap="outerHTML" rel="prev">← Prev</a>
+    {{else}}<span class="page-btn page-edge is-disabled">← Prev</span>{{end}}
+    <span class="page-nums">Page {{.Ledger.Page}} of {{.Ledger.Pages}}</span>
+    {{if lt .Ledger.Page .Ledger.Pages}}
+      <a class="page-btn page-edge" href="{{.Ledger.PageHref (inc .Ledger.Page)}}" hx-get="{{.Ledger.PageHX (inc .Ledger.Page)}}" hx-target="#admin-ledger" hx-swap="outerHTML" rel="next">Next →</a>
+    {{else}}<span class="page-btn page-edge is-disabled">Next →</span>{{end}}
+  </nav>
+  {{end}}
+  {{else}}
+  <div class="empty">
+    <p class="empty-title">Nothing found</p>
+    <p class="empty-text">No entry matches {{if .Ledger.Q}}“{{.Ledger.Q}}”{{else}}your search{{end}}.</p>
+    <a class="btn btn-ghost" href="/admin" hx-get="/admin/entries" hx-target="#admin-ledger" hx-swap="outerHTML">Clear search</a>
+  </div>
+  {{end}}
+</section>
+{{end}}

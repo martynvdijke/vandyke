@@ -1,0 +1,50 @@
+{{define "admin-settings"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Analytics</p>
+    <h1>Umami settings</h1>
+    <p class="admin-lede">Point the ledger at your self-hosted Umami instance. Saved values apply immediately, including the Content-Security-Policy.</p>
+  </div>
+</div>
+
+{{if .Saved}}<p class="admin-flash" role="status">Settings saved.</p>{{end}}
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="admin-card admin-settings-card">
+  <div class="admin-status">
+    {{if .Umami.Enabled}}<span class="admin-dot is-on" aria-hidden="true"></span> Analytics is active{{else}}<span class="admin-dot" aria-hidden="true"></span> Analytics is off{{end}}
+    {{if .Umami.Origin}}<span class="admin-muted">· {{.Umami.Origin}}</span>{{end}}
+  </div>
+  <form method="post" action="/admin/settings" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="field">
+      <span class="field-label">Tracker URL</span>
+      <input type="url" name="umami_url" value="{{.Values.URL}}" placeholder="{{.Env.URL}}" autocomplete="off">
+      <span class="field-hint">Full URL of the Umami script, e.g. <code>https://umami.example.com/script.js</code>. Leave empty to use <code>UMAMI_URL</code>.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Website ID</span>
+      <input type="text" name="umami_website_id" value="{{.Values.WebsiteID}}" placeholder="{{.Env.WebsiteID}}" autocomplete="off">
+      <span class="field-hint">The UUID from the Umami website settings. Leave empty to use <code>UMAMI_WEBSITE_ID</code>.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Allowed domains <span class="field-optional">optional</span></span>
+      <input type="text" name="umami_domains" value="{{.Values.Domains}}" placeholder="{{.Env.Domains}}" autocomplete="off">
+      <span class="field-hint">Comma-separated hostnames for <code>data-domains</code>. Leave empty to use <code>UMAMI_DOMAINS</code>.</span>
+    </label>
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Save settings</button>
+      <a class="btn btn-ghost" href="/admin">Cancel</a>
+    </div>
+  </form>
+  <div class="admin-env-note">
+    <h2>Environment fallback</h2>
+    <dl>
+      <div><dt>UMAMI_URL</dt><dd>{{if .Env.URL}}{{.Env.URL}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>UMAMI_WEBSITE_ID</dt><dd>{{if .Env.WebsiteID}}{{.Env.WebsiteID}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>UMAMI_DOMAINS</dt><dd>{{if .Env.Domains}}{{.Env.Domains}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+    </dl>
+  </div>
+</section>
+{{template "admin-foot" .}}{{end}}

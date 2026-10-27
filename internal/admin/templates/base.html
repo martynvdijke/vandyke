@@ -1,0 +1,51 @@
+{{define "admin-head"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vanDyke admin</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/admin.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+  <script src="/static/js/admin.js" defer></script>
+  <script src="/static/vendor/htmx.min.js" defer></script>
+</head>
+<body class="admin-body">
+  <div class="grain" aria-hidden="true"></div>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="wordmark" href="/">vanDyke <span class="admin-tag">admin</span></a>
+      <nav class="masthead-nav" aria-label="Admin">
+        <a class="nav-link" href="/">View ledger</a>
+        <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme">
+          <span class="theme-dot" aria-hidden="true"></span>
+        </button>
+      </nav>
+    </div>
+  </header>
+  <main class="admin-page">
+{{end}}
+
+{{define "admin-foot"}}
+  </main>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>{{end}}
+
+{{define "admin-nav"}}
+<nav class="admin-nav" aria-label="Administration">
+  <a href="/admin">Entries</a>
+  <a href="/admin/settings">Analytics settings</a>
+  <a href="/" target="_blank" rel="noopener">Public site ↗</a>
+  <form class="admin-logout" method="post" action="/admin/logout">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="btn btn-ghost btn-small" type="submit">Log out</button>
+  </form>
+</nav>
+{{end}}
+
+{{define "admin-flash"}}{{if .Flash}}<p class="admin-flash" role="status">{{.Flash}}</p>{{end}}{{end}}

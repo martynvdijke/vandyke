@@ -57,14 +57,20 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 
 // SecurityHeaders sets conservative security headers and an optional CSP.
 func SecurityHeaders(csp string) func(http.Handler) http.Handler {
+	return SecurityHeadersFunc(func(*http.Request) string { return csp })
+}
+
+// SecurityHeadersFunc sets conservative security headers with a CSP resolved
+// per request, so runtime settings can change without restarting.
+func SecurityHeadersFunc(csp func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			h.Set("X-Frame-Options", "DENY")
-			if csp != "" {
-				h.Set("Content-Security-Policy", csp)
+			if policy := csp(r); policy != "" {
+				h.Set("Content-Security-Policy", policy)
 			}
 			next.ServeHTTP(w, r)
 		})
