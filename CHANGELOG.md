@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/martynvdijke/vandyke/compare/v1.1.0...v1.2.0) (2026-10-27)
+
+
+### Features
+
+* add admin interface with OIDC and Umami settings ([4349704](https://github.com/martynvdijke/vandyke/commit/4349704e610920b504bbfcad85823e82505f5e58))
+
 # [1.1.0](https://github.com/martynvdijke/vandyke/compare/v1.0.17...v1.1.0) (2026-10-27)
 
 
