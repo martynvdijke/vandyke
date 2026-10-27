@@ -2,9 +2,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,14 +39,67 @@ const (
 	MaxWordLen = 200
 	// MaxMeaningLen is the maximum accepted length of a correction.
 	MaxMeaningLen = 500
+	// MaxPhotoBytes caps the size of an uploaded photo.
+	MaxPhotoBytes = 10 << 20
 )
 
-// Entry is one row of the ledger: a misspelling and its correction.
+// Entry is one row of the ledger: a misspelling and its correction, optionally
+// accompanied by a photo of the offending text.
 type Entry struct {
 	ID        int64     `json:"id"`
 	Word      string    `json:"word"`
 	Meaning   string    `json:"meaning"`
+	PhotoURL  string    `json:"photo_url,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Photo is image evidence attached to an entry.
+type Photo struct {
+	ContentType string
+	Data        []byte
+	SHA256      string
+	Size        int
+}
+
+// NewPhoto validates an uploaded image and returns it ready for storage.
+func NewPhoto(data []byte) (*Photo, error) {
+	switch {
+	case len(data) == 0:
+		return nil, errors.New("photo is empty")
+	case len(data) > MaxPhotoBytes:
+		return nil, fmt.Errorf("photo must be at most %d MB", MaxPhotoBytes/(1<<20))
+	}
+
+	contentType := photoContentType(data)
+	if contentType == "" {
+		return nil, errors.New("photo must be a JPEG, PNG, GIF or WebP image")
+	}
+
+	sum := sha256.Sum256(data)
+	return &Photo{
+		ContentType: contentType,
+		Data:        data,
+		SHA256:      hex.EncodeToString(sum[:]),
+		Size:        len(data),
+	}, nil
+}
+
+func photoContentType(data []byte) string {
+	switch {
+	case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+		return "image/jpeg"
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
+		return "image/gif"
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return "image/webp"
+	}
+	return ""
+}
+
+func photoURL(id int64) string {
+	return fmt.Sprintf("/api/v1/entries/%d/photo", id)
 }
 
 // ListParams describes a ledger query.
@@ -85,14 +141,15 @@ var sortColumns = map[string]string{
 	"created_at": "created_at",
 }
 
-// ValidateEntry checks user-supplied word and meaning values.
-func ValidateEntry(word, meaning string) error {
+// ValidateEntry checks user-supplied word and meaning values. The text fields
+// are optional when a photo is attached; otherwise both are required.
+func ValidateEntry(word, meaning string, hasPhoto bool) error {
 	switch {
-	case strings.TrimSpace(word) == "":
+	case !hasPhoto && strings.TrimSpace(word) == "":
 		return errors.New("word is required")
 	case len([]rune(word)) > MaxWordLen:
 		return fmt.Errorf("word must be at most %d characters", MaxWordLen)
-	case strings.TrimSpace(meaning) == "":
+	case !hasPhoto && strings.TrimSpace(meaning) == "":
 		return errors.New("meaning is required")
 	case len([]rune(meaning)) > MaxMeaningLen:
 		return fmt.Errorf("meaning must be at most %d characters", MaxMeaningLen)
@@ -288,12 +345,12 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 	args := make([]any, 0, 2)
 	if p.Query != "" {
 		pattern := "%" + escapeLike(p.Query) + "%"
-		where = ` WHERE (word LIKE ? ESCAPE '\' OR meaning LIKE ? ESCAPE '\')`
+		where = ` WHERE (e.word LIKE ? ESCAPE '\' OR e.meaning LIKE ? ESCAPE '\')`
 		args = append(args, pattern, pattern)
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries`+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries e`+where, args...).Scan(&total); err != nil {
 		return Page{}, fmt.Errorf("count entries: %w", err)
 	}
 
@@ -307,7 +364,9 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 		p.Page = 1
 	}
 
-	query := `SELECT id, word, meaning, created_at FROM entries` + where +
+	query := `SELECT e.id, e.word, e.meaning, e.created_at,
+		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
+		FROM entries e` + where +
 		` ORDER BY ` + sortColumns[p.Sort] + ` ` + strings.ToUpper(p.Order) + `, id ` + strings.ToUpper(p.Order) +
 		` LIMIT ? OFFSET ?`
 	args = append(args, p.PerPage, (p.Page-1)*p.PerPage)
@@ -335,7 +394,9 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 
 // GetEntry returns a single entry by ID.
 func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, word, meaning, created_at FROM entries WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.created_at,
+		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
+		FROM entries e WHERE e.id = ?`, id)
 	entry, err := scanEntry(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Entry{}, ErrNotFound
@@ -343,20 +404,54 @@ func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
 	return entry, err
 }
 
-// CreateEntry validates and inserts a new ledger entry.
-func (s *Store) CreateEntry(ctx context.Context, word, meaning string) (Entry, error) {
+// GetEntryPhoto returns the photo attached to an entry.
+func (s *Store) GetEntryPhoto(ctx context.Context, id int64) (Photo, error) {
+	var photo Photo
+	err := s.db.QueryRowContext(ctx,
+		`SELECT content_type, data, sha256, size FROM entry_photos WHERE entry_id = ?`, id,
+	).Scan(&photo.ContentType, &photo.Data, &photo.SHA256, &photo.Size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Photo{}, ErrNotFound
+	}
+	if err != nil {
+		return Photo{}, fmt.Errorf("query entry photo: %w", err)
+	}
+	return photo, nil
+}
+
+// CreateEntry validates and inserts a new ledger entry, optionally with a photo.
+func (s *Store) CreateEntry(ctx context.Context, word, meaning string, photo *Photo) (Entry, error) {
 	word = strings.TrimSpace(word)
 	meaning = strings.TrimSpace(meaning)
-	if err := ValidateEntry(word, meaning); err != nil {
+	if err := ValidateEntry(word, meaning, photo != nil); err != nil {
 		return Entry{}, err
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO entries (word, meaning) VALUES (?, ?)`, word, meaning)
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return Entry{}, fmt.Errorf("begin entry insert: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO entries (word, meaning) VALUES (?, ?)`, word, meaning)
+	if err != nil {
+		_ = tx.Rollback()
 		return Entry{}, fmt.Errorf("insert entry: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		_ = tx.Rollback()
 		return Entry{}, fmt.Errorf("last insert id: %w", err)
+	}
+	if photo != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size) VALUES (?, ?, ?, ?, ?)`,
+			id, photo.ContentType, photo.Data, photo.SHA256, photo.Size,
+		); err != nil {
+			_ = tx.Rollback()
+			return Entry{}, fmt.Errorf("insert entry photo: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Entry{}, fmt.Errorf("commit entry insert: %w", err)
 	}
 	return s.GetEntry(ctx, id)
 }
@@ -380,7 +475,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
-			COUNT(DISTINCT word COLLATE NOCASE),
+			COUNT(DISTINCT CASE WHEN word <> '' THEN word COLLATE NOCASE END),
 			MIN(created_at),
 			MAX(created_at),
 			COUNT(CASE WHEN created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 day') THEN 1 END)
@@ -411,8 +506,9 @@ func scanEntry(row rowScanner) (Entry, error) {
 	var (
 		entry     Entry
 		createdAt string
+		hasPhoto  bool
 	)
-	if err := row.Scan(&entry.ID, &entry.Word, &entry.Meaning, &createdAt); err != nil {
+	if err := row.Scan(&entry.ID, &entry.Word, &entry.Meaning, &createdAt, &hasPhoto); err != nil {
 		return Entry{}, err
 	}
 	parsed, err := time.Parse(time.RFC3339, createdAt)
@@ -420,6 +516,9 @@ func scanEntry(row rowScanner) (Entry, error) {
 		return Entry{}, fmt.Errorf("parse created_at %q: %w", createdAt, err)
 	}
 	entry.CreatedAt = parsed.UTC()
+	if hasPhoto {
+		entry.PhotoURL = photoURL(entry.ID)
+	}
 	return entry, nil
 }
 

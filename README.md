@@ -17,8 +17,9 @@ No JavaScript build step, no external services required.
   SQLite on first start.
 - **JSON REST API** — list, search, sort, paginate and add entries; stats and a
   health endpoint. See [API](#api).
-- **Add entries from the web or the API** — protected by a per-IP token bucket
-  (default: 10 additions per hour, burst of 5).
+- **Add entries from the web or the API** — text entries or photos of a
+  misspelling, protected by a per-IP token bucket (default: 10 additions per
+  hour, burst of 5).
 - **Optional self-hosted Umami** — set two environment variables and the
   tracker is injected, with page views and custom events (`search`,
   `entry-added`, `theme-toggle`). No analytics is loaded otherwise, and the CSP
@@ -87,7 +88,8 @@ stable envelope:
 | --- | --- |
 | `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30). |
 | `GET /api/v1/entries/{id}` | Single entry. `404` when missing. |
-| `POST /api/v1/entries` | Add an entry. Body `{"word": "...", "meaning": "..."}`, 64 KiB cap. `201` with `Location`; `422` on validation errors; `429` when rate limited. |
+| `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning` and an optional `photo` file. `201` with `Location`; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
+| `GET /api/v1/entries/{id}/photo` | The entry's photo (`image/jpeg`, `image/png`, `image/gif` or `image/webp`). `404` when the entry has no photo. |
 | `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`. |
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
 
@@ -100,10 +102,15 @@ curl -s localhost:8080/api/v1/stats
 curl -s -X POST localhost:8080/api/v1/entries \
   -H 'Content-Type: application/json' \
   -d '{"word":"nieuw woord","meaning":"nieuwe correctie"}'
+curl -s -X POST localhost:8080/api/v1/entries \
+  -F 'word=nieuw woord' -F 'meaning=nieuwe correctie' -F 'photo=@slip.png'
 ```
 
-Validation: `word` 1–200 characters, `meaning` 1–500 characters; both are
-trimmed. Duplicates are allowed, exactly as on the original site.
+Validation: without a photo, `word` is 1–200 characters and `meaning` is 1–500
+characters; both are trimmed. Entries created with a photo may leave the text
+fields empty, so a photo alone is a valid entry. Photos must be JPEG, PNG, GIF
+or WebP and at most 10 MB; they are stored in SQLite and returned as `photo_url`
+on the entry. Duplicates are allowed, exactly as on the original site.
 
 ## Umami analytics
 

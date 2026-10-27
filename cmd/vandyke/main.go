@@ -106,7 +106,7 @@ func cspFor(cfg config.Config) string {
 		connectSrc += " " + origin
 	}
 	return fmt.Sprintf(
-		"default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src %s; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+		"default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src %s; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 		scriptSrc, connectSrc,
 	)
 }

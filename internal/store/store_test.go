@@ -2,11 +2,24 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("decode tiny png: %v", err)
+	}
+	return data
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -92,7 +105,7 @@ func TestSeedOnlyImportedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open first: %v", err)
 	}
-	if _, err := first.CreateEntry(ctx, "nieuw", "nieuw correct"); err != nil {
+	if _, err := first.CreateEntry(ctx, "nieuw", "nieuw correct", nil); err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
 	if err := first.Close(); err != nil {
@@ -240,12 +253,12 @@ func TestCreateEntryValidationAndTrimming(t *testing.T) {
 		{"word", strings.Repeat("y", MaxMeaningLen+1)},
 	}
 	for _, tc := range invalid {
-		if _, err := st.CreateEntry(ctx, tc.word, tc.meaning); err == nil {
+		if _, err := st.CreateEntry(ctx, tc.word, tc.meaning, nil); err == nil {
 			t.Errorf("CreateEntry(%q, %q) succeeded, want validation error", tc.word, tc.meaning)
 		}
 	}
 
-	entry, err := st.CreateEntry(ctx, "  nieuw woord  ", "  nieuwe correctie  ")
+	entry, err := st.CreateEntry(ctx, "  nieuw woord  ", "  nieuwe correctie  ", nil)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -264,6 +277,92 @@ func TestCreateEntryValidationAndTrimming(t *testing.T) {
 	}
 }
 
+func TestCreatePhotoEntry(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	photo, err := NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	if photo.ContentType != "image/png" || photo.Size == 0 || photo.SHA256 == "" {
+		t.Fatalf("photo metadata = %+v", photo)
+	}
+
+	entry, err := st.CreateEntry(ctx, "  foto  ", "  photo  ", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry with photo: %v", err)
+	}
+	if entry.PhotoURL != "/api/v1/entries/"+itoa(entry.ID)+"/photo" {
+		t.Fatalf("photo_url = %q", entry.PhotoURL)
+	}
+
+	stored, err := st.GetEntryPhoto(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("GetEntryPhoto: %v", err)
+	}
+	if string(stored.Data) != string(photo.Data) || stored.ContentType != "image/png" {
+		t.Fatalf("stored photo = %+v", stored)
+	}
+
+	page, err := st.ListEntries(ctx, ListParams{})
+	if err != nil {
+		t.Fatalf("ListEntries: %v", err)
+	}
+	if len(page.Entries) != 1 || page.Entries[0].PhotoURL == "" {
+		t.Fatalf("listed entries = %+v, want photo_url set", page.Entries)
+	}
+
+	if _, err := st.GetEntryPhoto(ctx, entry.ID+1000); err != ErrNotFound {
+		t.Fatalf("GetEntryPhoto(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPhotoOnlyEntry(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	photo, err := NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(ctx, "", "   ", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry(photo only): %v", err)
+	}
+	if entry.Word != "" || entry.Meaning != "" || entry.PhotoURL == "" {
+		t.Fatalf("entry = %+v, want empty text and a photo", entry)
+	}
+
+	stats, err := st.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Total != 1 || stats.UniqueWords != 0 {
+		t.Fatalf("stats = %+v, want one photo entry and zero unique words", stats)
+	}
+}
+
+func TestNewPhotoValidation(t *testing.T) {
+	if _, err := NewPhoto(nil); err == nil {
+		t.Fatal("NewPhoto(nil) succeeded, want error")
+	}
+	if _, err := NewPhoto([]byte("not an image")); err == nil {
+		t.Fatal("NewPhoto(text) succeeded, want error")
+	}
+	oversized := make([]byte, MaxPhotoBytes+1)
+	copy(oversized, []byte("\x89PNG\r\n\x1a\n"))
+	if _, err := NewPhoto(oversized); err == nil {
+		t.Fatal("NewPhoto(oversized) succeeded, want error")
+	}
+}
+
+func itoa(n int64) string {
+	return strconv.FormatInt(n, 10)
+}
+
 func TestStats(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
@@ -273,19 +372,21 @@ func TestStats(t *testing.T) {
 	insertRaw(t, st, "Foo", "one", now.Format(time.RFC3339))
 	insertRaw(t, st, "foo", "two", now.AddDate(0, 0, -40).Format(time.RFC3339))
 	insertRaw(t, st, "bar", "three", now.AddDate(0, 0, -10).Format(time.RFC3339))
+	// A photo-only entry has no misspelling and must not inflate unique words.
+	insertRaw(t, st, "", "", now.AddDate(0, 0, -5).Format(time.RFC3339))
 
 	stats, err := st.Stats(ctx)
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
-	if stats.Total != 3 {
-		t.Errorf("total = %d, want 3", stats.Total)
+	if stats.Total != 4 {
+		t.Errorf("total = %d, want 4", stats.Total)
 	}
 	if stats.UniqueWords != 2 {
 		t.Errorf("unique words = %d, want 2 (case-insensitive)", stats.UniqueWords)
 	}
-	if stats.EntriesLast30d != 2 {
-		t.Errorf("entries last 30 days = %d, want 2", stats.EntriesLast30d)
+	if stats.EntriesLast30d != 3 {
+		t.Errorf("entries last 30 days = %d, want 3", stats.EntriesLast30d)
 	}
 	if stats.FirstEntryAt == nil || !stats.FirstEntryAt.Equal(now.AddDate(0, 0, -40).Truncate(time.Second)) {
 		t.Errorf("first entry = %v, want the 40-day-old row", stats.FirstEntryAt)

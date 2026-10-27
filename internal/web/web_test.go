@@ -1,8 +1,11 @@
 package web
 
 import (
+	"bytes"
+	"encoding/base64"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -80,6 +83,60 @@ func postForm(t *testing.T, srv *httptest.Server, form url.Values, headers map[s
 		t.Fatalf("read body: %v", err)
 	}
 	return resp.StatusCode, resp.Header, string(body)
+}
+
+const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("decode tiny png: %v", err)
+	}
+	return data
+}
+
+func postMultipart(t *testing.T, srv *httptest.Server, fields map[string]string, photo []byte, headers map[string]string) (int, http.Header, string) {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := mw.WriteField(key, value); err != nil {
+			t.Fatalf("write field: %v", err)
+		}
+	}
+	if photo != nil {
+		part, err := mw.CreateFormFile("photo", "slip.png")
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, err := part.Write(photo); err != nil {
+			t.Fatalf("write photo: %v", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/entries", &body)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /entries multipart: %v", err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, resp.Header, string(responseBody)
 }
 
 func TestIndexRendersLedgerAndStats(t *testing.T) {
@@ -241,6 +298,63 @@ func TestCreateEntryWithoutJavaScript(t *testing.T) {
 	}
 	if !strings.Contains(errorPage, "Word is required") || !strings.Contains(errorPage, `id="add-dialog"`) {
 		t.Fatal("full error page with the add dialog not rendered")
+	}
+}
+
+func TestCreateEntryWithPhoto(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	status, headers, body := postMultipart(t, srv,
+		map[string]string{"word": "foto", "meaning": "photo"}, tinyPNG(t),
+		map[string]string{"HX-Request": "true"})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	trigger := headers.Get("HX-Trigger-After-Swap")
+	if !strings.Contains(trigger, `"photo":true`) {
+		t.Fatalf("HX-Trigger-After-Swap = %q, want photo flag", trigger)
+	}
+	if !strings.Contains(body, "entry-photo") || !strings.Contains(body, "/api/v1/entries/") {
+		t.Fatal("re-rendered ledger does not show the photo")
+	}
+}
+
+func TestCreatePhotoOnlyEntry(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	status, headers, body := postMultipart(t, srv, nil, tinyPNG(t), map[string]string{"HX-Request": "true"})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if got := headers.Get("HX-Retarget"); got != "" {
+		t.Fatalf("unexpected HX-Retarget = %q", got)
+	}
+	if !strings.Contains(body, "photo entry") {
+		t.Fatal("photo-only entry is not labelled in the ledger")
+	}
+}
+
+func TestCreateEntryWithInvalidPhoto(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	status, headers, body := postMultipart(t, srv,
+		map[string]string{"word": "x", "meaning": "y"}, []byte("just text"),
+		map[string]string{"HX-Request": "true"})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if got := headers.Get("HX-Retarget"); got != "#form-error" {
+		t.Fatalf("HX-Retarget = %q, want #form-error", got)
+	}
+	if !strings.Contains(body, "Photo must be") {
+		t.Fatalf("error body = %q, want photo guidance", body)
+	}
+
+	// The form still validates text when no photo is attached.
+	status, _, body = postMultipart(t, srv, map[string]string{"word": "x"}, nil,
+		map[string]string{"HX-Request": "true"})
+	if status != http.StatusOK || !strings.Contains(body, "Meaning is required") {
+		t.Fatalf("status = %d body = %q, want missing meaning", status, body)
 	}
 }
 

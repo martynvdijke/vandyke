@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -197,6 +199,126 @@ func TestCreateEntryValidation(t *testing.T) {
 				t.Fatalf("code = %q, want %q", body.Error.Code, tc.code)
 			}
 		})
+	}
+}
+
+const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("decode tiny png: %v", err)
+	}
+	return data
+}
+
+func postPhotoEntry(t *testing.T, srv *httptest.Server, fields map[string]string, filename string, data []byte) *http.Response {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := mw.WriteField(key, value); err != nil {
+			t.Fatalf("write field: %v", err)
+		}
+	}
+	if data != nil {
+		part, err := mw.CreateFormFile("photo", filename)
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, err := part.Write(data); err != nil {
+			t.Fatalf("write photo: %v", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	resp, err := http.Post(srv.URL+"/api/v1/entries", mw.FormDataContentType(), &body)
+	if err != nil {
+		t.Fatalf("POST multipart: %v", err)
+	}
+	return resp
+}
+
+func TestCreateEntryWithPhoto(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+	png := tinyPNG(t)
+
+	resp := postPhotoEntry(t, srv, map[string]string{"word": "foto", "meaning": "photo"}, "slip.png", png)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	var entry store.Entry
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if entry.PhotoURL != "/api/v1/entries/"+itoa(entry.ID)+"/photo" {
+		t.Fatalf("photo_url = %q", entry.PhotoURL)
+	}
+
+	photoResp, err := http.Get(srv.URL + entry.PhotoURL)
+	if err != nil {
+		t.Fatalf("GET photo: %v", err)
+	}
+	defer photoResp.Body.Close()
+	if photoResp.StatusCode != http.StatusOK {
+		t.Fatalf("photo status = %d, want 200", photoResp.StatusCode)
+	}
+	if got := photoResp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("photo content type = %q, want image/png", got)
+	}
+	if got := photoResp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("photo nosniff = %q", got)
+	}
+	body, err := io.ReadAll(photoResp.Body)
+	if err != nil {
+		t.Fatalf("read photo: %v", err)
+	}
+	if !bytes.Equal(body, png) {
+		t.Fatalf("photo bytes differ from upload")
+	}
+}
+
+func TestCreatePhotoOnlyEntry(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	resp := postPhotoEntry(t, srv, nil, "slip.png", tinyPNG(t))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var entry store.Entry
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if entry.Word != "" || entry.Meaning != "" || entry.PhotoURL == "" {
+		t.Fatalf("entry = %+v, want a photo-only entry", entry)
+	}
+}
+
+func TestCreateEntryWithInvalidPhoto(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	resp := postPhotoEntry(t, srv, map[string]string{"word": "x", "meaning": "y"}, "notes.txt", []byte("just text"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body.Error.Code != "validation_error" {
+		t.Fatalf("code = %q, want validation_error", body.Error.Code)
+	}
+}
+
+func TestGetEntryPhotoNotFound(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	resp := getJSON(t, srv.URL+"/api/v1/entries/999999/photo", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
 

@@ -4,8 +4,10 @@ package web
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -217,11 +219,43 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = r.ParseForm()
+	r.Body = http.MaxBytesReader(rw, r.Body, store.MaxPhotoBytes+(1<<20))
+	parseErr := r.ParseForm()
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		parseErr = r.ParseMultipartForm(64 << 10)
+	}
+	if parseErr != nil {
+		message := fmt.Sprintf("The upload is too large or could not be read. Photos can be up to %d MB.", store.MaxPhotoBytes/(1<<20))
+		if isHTMX {
+			w.renderFormError(rw, message)
+		} else {
+			w.renderIndexError(rw, r, http.StatusRequestEntityTooLarge, message, "", "")
+		}
+		return
+	}
+	if r.MultipartForm != nil {
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
+	}
+
 	word := strings.TrimSpace(r.PostFormValue("word"))
 	meaning := strings.TrimSpace(r.PostFormValue("meaning"))
 
-	if err := store.ValidateEntry(word, meaning); err != nil {
+	var photo *store.Photo
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		var photoErr error
+		photo, photoErr = uploadedPhoto(r)
+		if photoErr != nil {
+			message := capitalize(photoErr.Error())
+			if isHTMX {
+				w.renderFormError(rw, message)
+			} else {
+				w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning)
+			}
+			return
+		}
+	}
+
+	if err := store.ValidateEntry(word, meaning, photo != nil); err != nil {
 		message := capitalize(err.Error())
 		if isHTMX {
 			w.renderFormError(rw, message)
@@ -231,7 +265,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := w.store.CreateEntry(r.Context(), word, meaning)
+	entry, err := w.store.CreateEntry(r.Context(), word, meaning, photo)
 	if err != nil {
 		w.logger.Error("create entry", "error", err)
 		http.Error(rw, "could not add entry", http.StatusInternalServerError)
@@ -244,7 +278,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	trigger, _ := json.Marshal(map[string]any{
-		"entryAdded": map[string]any{"id": entry.ID, "word": entry.Word},
+		"entryAdded": map[string]any{"id": entry.ID, "word": entry.Word, "photo": entry.PhotoURL != ""},
 	})
 	rw.Header().Set("HX-Trigger-After-Swap", string(trigger))
 
@@ -367,6 +401,26 @@ func buildPageLinks(current, total int, href func(int) string) []pageLink {
 		add(total)
 	}
 	return links
+}
+
+func uploadedPhoto(r *http.Request) (*store.Photo, error) {
+	file, _, err := r.FormFile("photo")
+	if errors.Is(err, http.ErrMissingFile) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, errors.New("could not read the photo")
+	}
+	defer func() { _ = file.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(file, store.MaxPhotoBytes+1))
+	if err != nil {
+		return nil, errors.New("could not read the photo")
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return store.NewPhoto(data)
 }
 
 func (w *Web) renderFormError(rw http.ResponseWriter, message string) {

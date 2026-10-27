@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -15,7 +16,10 @@ import (
 	"vandyke.thor.edu/vandyke/internal/store"
 )
 
-const maxBodyBytes = 64 << 10
+const (
+	maxBodyBytes       = 64 << 10
+	maxUploadBodyBytes = store.MaxPhotoBytes + (1 << 20)
+)
 
 // API serves /api/v1 endpoints.
 type API struct {
@@ -36,6 +40,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/entries", a.handleListEntries)
 	mux.HandleFunc("GET /api/v1/entries/{id}", a.handleGetEntry)
 	mux.HandleFunc("POST /api/v1/entries", a.rateLimited(a.handleCreateEntry))
+	mux.HandleFunc("GET /api/v1/entries/{id}/photo", a.handleGetEntryPhoto)
 	mux.HandleFunc("GET /api/v1/stats", a.handleStats)
 }
 
@@ -79,6 +84,11 @@ func (a *API) handleGetEntry(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		a.createEntryMultipart(rw, r)
+		return
+	}
+
 	r.Body = http.MaxBytesReader(rw, r.Body, maxBodyBytes)
 
 	var input struct {
@@ -87,18 +97,53 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 	}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&input); err != nil {
-		httpx.WriteError(rw, http.StatusBadRequest, "invalid_json", "request body must be JSON: {\"word\": \"...\", \"meaning\": \"...\"}")
+		httpx.WriteError(rw, http.StatusBadRequest, "invalid_json", "request body must be JSON: {\"word\": \"...\", \"meaning\": \"...\"} or multipart/form-data with an optional photo")
 		return
 	}
 
 	input.Word = strings.TrimSpace(input.Word)
 	input.Meaning = strings.TrimSpace(input.Meaning)
-	if err := store.ValidateEntry(input.Word, input.Meaning); err != nil {
+	if err := store.ValidateEntry(input.Word, input.Meaning, false); err != nil {
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 
-	entry, err := a.store.CreateEntry(r.Context(), input.Word, input.Meaning)
+	a.writeCreatedEntry(rw, r, input.Word, input.Meaning, nil)
+}
+
+func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(rw, r.Body, maxUploadBodyBytes)
+	if err := r.ParseMultipartForm(64 << 10); err != nil {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+		httpx.WriteError(rw, http.StatusRequestEntityTooLarge, "request_too_large", "request body is too large or not valid multipart/form-data")
+		return
+	}
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
+
+	word := strings.TrimSpace(r.PostFormValue("word"))
+	meaning := strings.TrimSpace(r.PostFormValue("meaning"))
+
+	photo, err := uploadedPhoto(r, "photo")
+	if err != nil {
+		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
+	if err := store.ValidateEntry(word, meaning, photo != nil); err != nil {
+		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
+
+	a.writeCreatedEntry(rw, r, word, meaning, photo)
+}
+
+func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, meaning string, photo *store.Photo) {
+	entry, err := a.store.CreateEntry(r.Context(), word, meaning, photo)
 	if err != nil {
 		a.logger.Error("create entry", "error", err)
 		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not create entry")
@@ -106,6 +151,53 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Location", fmt.Sprintf("/api/v1/entries/%d", entry.ID))
 	httpx.WriteJSON(rw, http.StatusCreated, entry)
+}
+
+func uploadedPhoto(r *http.Request, field string) (*store.Photo, error) {
+	file, _, err := r.FormFile(field)
+	if errors.Is(err, http.ErrMissingFile) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, errors.New("could not read the photo")
+	}
+	defer func() { _ = file.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(file, store.MaxPhotoBytes+1))
+	if err != nil {
+		return nil, errors.New("could not read the photo")
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return store.NewPhoto(data)
+}
+
+func (a *API) handleGetEntryPhoto(rw http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		httpx.WriteError(rw, http.StatusBadRequest, "invalid_id", "id must be a positive integer")
+		return
+	}
+	photo, err := a.store.GetEntryPhoto(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpx.WriteError(rw, http.StatusNotFound, "not_found", "entry photo does not exist")
+		return
+	case err != nil:
+		a.logger.Error("get entry photo", "error", err, "id", id)
+		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not load entry photo")
+		return
+	}
+
+	rw.Header().Set("Content-Type", photo.ContentType)
+	rw.Header().Set("Content-Length", strconv.Itoa(len(photo.Data)))
+	rw.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	rw.Header().Set("X-Content-Type-Options", "nosniff")
+	rw.WriteHeader(http.StatusOK)
+	if _, err := rw.Write(photo.Data); err != nil {
+		a.logger.Warn("write entry photo", "error", err, "id", id)
+	}
 }
 
 func (a *API) handleStats(rw http.ResponseWriter, r *http.Request) {

@@ -105,6 +105,35 @@
       });
     });
 
+    /* photo preview in the add dialog */
+    var photoInput = document.querySelector('#add-dialog input[name="photo"]');
+    var photoPreview = document.getElementById("photo-preview");
+    var photoPreviewImg = document.getElementById("photo-preview-img");
+    var previewURL = null;
+
+    function clearPhotoPreview() {
+      if (previewURL) {
+        URL.revokeObjectURL(previewURL);
+        previewURL = null;
+      }
+      if (photoPreviewImg) photoPreviewImg.removeAttribute("src");
+      if (photoPreview) photoPreview.hidden = true;
+    }
+
+    function updatePhotoPreview() {
+      clearPhotoPreview();
+      if (!photoInput || !photoInput.files || !photoInput.files[0]) return;
+      previewURL = URL.createObjectURL(photoInput.files[0]);
+      if (photoPreviewImg) photoPreviewImg.src = previewURL;
+      if (photoPreview) photoPreview.hidden = false;
+    }
+
+    if (photoInput) {
+      photoInput.addEventListener("change", updatePhotoPreview);
+      var addDialog = document.getElementById("add-dialog");
+      if (addDialog) addDialog.addEventListener("close", clearPhotoPreview);
+    }
+
     /* server-rendered toast after a no-JS form post */
     document.querySelectorAll(".toast-server").forEach(function (el) {
       window.setTimeout(function () {
@@ -115,14 +144,17 @@
     /* add-entry flow */
     document.body.addEventListener("entryAdded", function (event) {
       var detail = event.detail || {};
-      toast(detail.word ? "\u201C" + detail.word + "\u201D added to the ledger." : "Added to the ledger.");
+      var added = detail.word ? "\u201C" + detail.word + "\u201D added to the ledger." : "Added to the ledger.";
+      if (detail.photo && !detail.word) added = "Photo added to the ledger.";
+      toast(added);
 
       var dialog = document.getElementById("add-dialog");
-      if (dialog && dialog.open) {
-        dialog.close();
+      if (dialog) {
+        if (dialog.open) dialog.close();
         var form = dialog.querySelector("form");
         if (form) form.reset();
       }
+      if (typeof clearPhotoPreview === "function") clearPhotoPreview();
       var error = document.getElementById("form-error");
       if (error) error.textContent = "";
 
@@ -133,7 +165,7 @@
           row.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
       }
-      track("entry-added", { word: detail.word || "" });
+      track("entry-added", { word: detail.word || "", photo: !!detail.photo });
     });
 
     /* search analytics */
