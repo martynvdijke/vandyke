@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/martynvdijke/vandyke/compare/v1.0.17...v1.1.0) (2026-10-27)
+
+
+### Features
+
+* support photo entries in API and ledger ([c568ec6](https://github.com/martynvdijke/vandyke/commit/c568ec6244acb6d2b324646ee4dfb96210d58fa4))
+
 ## [1.0.17](https://github.com/martynvdijke/vandyke/compare/v1.0.16...v1.0.17) (2026-10-26)
 
 ## [1.0.16](https://github.com/martynvdijke/vandyke/compare/v1.0.15...v1.0.16) (2026-10-23)
