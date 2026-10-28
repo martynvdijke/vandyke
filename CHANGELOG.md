@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/martynvdijke/vandyke/compare/v1.4.0...v1.4.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **deps:** update all non-major dependencies ([#22](https://github.com/martynvdijke/vandyke/issues/22)) ([b935090](https://github.com/martynvdijke/vandyke/commit/b9350905d6087ef20be3148044f0d4a9334aa35d))
+
 # [1.4.0](https://github.com/martynvdijke/vandyke/compare/v1.3.0...v1.4.0) (2026-10-28)
 
 
