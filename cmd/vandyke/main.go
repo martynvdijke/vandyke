@@ -16,6 +16,7 @@ import (
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpapi"
 	"vandyke.thor.edu/vandyke/internal/httpx"
+	"vandyke.thor.edu/vandyke/internal/media"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/settings"
 	"vandyke.thor.edu/vandyke/internal/store"
@@ -50,13 +51,17 @@ func run() error {
 	}
 	defer func() { _ = st.Close() }()
 
+	if err := media.Backfill(ctx, st, logger); err != nil {
+		logger.Warn("backfill photo derivatives", "error", err)
+	}
+
 	limiter := ratelimit.New(cfg.AddRateLimitPerHour, cfg.AddRateLimitBurst)
 	api := httpapi.New(st, limiter, cfg.TrustProxy, logger)
 	settingsStore, err := settings.New(ctx, st, cfg.Umami)
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	ui, err := web.New(st, limiter, settingsStore.Current, cfg.TrustProxy, logger)
+	ui, err := web.New(st, limiter, settingsStore.Current, cfg.TrustProxy, cfg.PublicBaseURL, logger)
 	if err != nil {
 		return err
 	}
@@ -95,6 +100,7 @@ func run() error {
 			"umami", settingsStore.Current().Enabled(),
 			"admin_setup_token", cfg.AdminSetupToken != "",
 			"oidc", cfg.OIDC.Enabled(),
+			"public_base_url", cfg.PublicBaseURL,
 			"rate_limit_per_hour", cfg.AddRateLimitPerHour,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

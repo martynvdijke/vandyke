@@ -9,6 +9,7 @@ services:
     environment:
       PORT: "8080"
       DB_PATH: /data/vandyke.db
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       TRUST_PROXY: "false"
       ADD_RATE_LIMIT_PER_HOUR: "10"
       ADD_RATE_LIMIT_BURST: "5"

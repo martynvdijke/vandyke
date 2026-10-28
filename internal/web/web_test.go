@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,13 +25,19 @@ func discardLogger() *slog.Logger {
 
 func newTestWeb(t *testing.T, umami config.Umami, limiter *ratelimit.Limiter) *httptest.Server {
 	t.Helper()
+	srv, _ := newTestWebWithStore(t, umami, limiter)
+	return srv
+}
+
+func newTestWebWithStore(t *testing.T, umami config.Umami, limiter *ratelimit.Limiter) (*httptest.Server, *store.Store) {
+	t.Helper()
 	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "web.db"))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	w, err := New(st, limiter, func() config.Umami { return umami }, false, discardLogger())
+	w, err := New(st, limiter, func() config.Umami { return umami }, false, "", discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -38,7 +45,7 @@ func newTestWeb(t *testing.T, umami config.Umami, limiter *ratelimit.Limiter) *h
 	w.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, st
 }
 
 func fetch(t *testing.T, srv *httptest.Server, path string, headers map[string]string) (int, http.Header, string) {
@@ -423,5 +430,145 @@ func TestStaticAssetsAreCacheable(t *testing.T) {
 	status, _, fontCSS := fetch(t, srv, "/static/fonts/fonts.css", nil)
 	if status != http.StatusOK || !strings.Contains(fontCSS, "@font-face") {
 		t.Fatalf("fonts.css status %d, contains @font-face: %v", status, strings.Contains(fontCSS, "@font-face"))
+	}
+}
+
+func TestPermalinkPage(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	entry, err := st.CreateEntry(t.Context(), "perm", "link", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	id := strconv.FormatInt(entry.ID, 10)
+
+	status, _, body := fetch(t, srv, "/e/"+id, nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	for _, want := range []string{
+		`property="og:title"`,
+		`property="og:url"`,
+		`rel="canonical"`,
+		`href="` + srv.URL + `/e/` + id + `"`,
+		`data-copy-link="` + srv.URL + `/e/` + id + `"`,
+		"Copy link",
+		"Back to the ledger",
+		"perm",
+		"link",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("permalink does not contain %q", want)
+		}
+	}
+
+	status, _, missing := fetch(t, srv, "/e/999999", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("missing permalink status = %d, want 404", status)
+	}
+	if !strings.Contains(missing, "Entry not found") {
+		t.Fatal("styled not-found page not rendered")
+	}
+	status, _, _ = fetch(t, srv, "/e/not-a-number", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("invalid permalink status = %d, want 404", status)
+	}
+}
+
+func TestPermalinkPhotoOpenGraph(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	photo, err := store.NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "foto", "photo", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	id := strconv.FormatInt(entry.ID, 10)
+
+	status, _, body := fetch(t, srv, "/e/"+id, nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	wantImage := srv.URL + "/api/v1/entries/" + id + "/photo?size=display"
+	if !strings.Contains(body, `property="og:image" content="`+wantImage+`"`) {
+		t.Fatalf("og:image missing %q in %s", wantImage, body)
+	}
+	if !strings.Contains(body, `name="twitter:card" content="summary_large_image"`) {
+		t.Fatal("twitter large-image card not rendered")
+	}
+}
+
+func TestLedgerPermalinksAndPhotoSizes(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	photo, err := store.NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "foto", "photo", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	id := strconv.FormatInt(entry.ID, 10)
+
+	_, _, body := fetch(t, srv, "/entries?per_page=100", nil)
+	if !strings.Contains(body, `href="/e/`+id+`"`) {
+		t.Fatal("entry number is not linked to its permalink")
+	}
+	if !strings.Contains(body, `src="`+entry.PhotoURL+`?size=thumb"`) {
+		t.Fatal("ledger thumbnail does not request the thumb variant")
+	}
+	if !strings.Contains(body, `href="`+entry.PhotoURL+`?size=display"`) {
+		t.Fatal("ledger photo link does not request the display variant")
+	}
+}
+
+func TestLedgerFilters(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	photo, err := store.NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "filterfoto", "photo", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	id := strconv.FormatInt(entry.ID, 10)
+
+	_, _, all := fetch(t, srv, "/", nil)
+	for _, want := range []string{`name="photo"`, `name="year"`, `value="1"`} {
+		if !strings.Contains(all, want) {
+			t.Errorf("filter control missing %q", want)
+		}
+	}
+
+	status, _, photos := fetch(t, srv, "/entries?photo=1&per_page=100", nil)
+	if status != http.StatusOK {
+		t.Fatalf("photo filter status = %d", status)
+	}
+	if !strings.Contains(photos, "filterfoto") || !strings.Contains(photos, "with photos") {
+		t.Fatal("photo filter did not return the photo entry")
+	}
+	if strings.Contains(photos, "kast systeem") {
+		t.Fatal("photo filter returned a text-only entry")
+	}
+	if !strings.Contains(photos, `href="/e/`+id+`"`) {
+		t.Fatal("photo filter lost the permalink")
+	}
+
+	_, _, year := fetch(t, srv, "/entries?year=2026&per_page=100", nil)
+	if !strings.Contains(year, "from 2026") {
+		t.Fatal("year filter label not rendered")
+	}
+	if strings.Contains(year, "kast systeem") {
+		t.Fatal("year filter returned an entry from another year")
+	}
+}
+
+func TestPhotoInputAllowsCameraCapture(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+	_, _, body := fetch(t, srv, "/", nil)
+	if !strings.Contains(body, `capture="environment"`) {
+		t.Fatal("photo input is missing mobile camera capture")
 	}
 }

@@ -2,7 +2,7 @@
 <section id="ledger" class="ledger" aria-live="polite">
   <div class="ledger-meta">
     <p class="ledger-count">
-      {{if .Ledger.Total}}<strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong> entries{{else}}No entries{{end}}{{if .Ledger.Query.Q}} for “{{.Ledger.Query.Q}}”{{end}}
+      {{if .Ledger.Total}}<strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong> entries{{else}}No entries{{end}}{{if .Ledger.Query.Q}} for “{{.Ledger.Query.Q}}”{{end}}{{if .Ledger.Query.PhotoOnly}} with photos{{end}}{{if gt .Ledger.Query.Year 0}} from {{.Ledger.Query.Year}}{{end}}
     </p>
     <p class="ledger-sort">sorted by {{.Ledger.Query.SortLabel}}<span class="dot" aria-hidden="true">·</span>misspelling <span class="arrow-mini" aria-hidden="true">→</span> correction</p>
   </div>
@@ -18,9 +18,9 @@
     <ol class="entries-list" role="rowgroup">
       {{range $i, $entry := .Ledger.Entries}}
       <li class="entry" role="row" data-entry-id="{{$entry.ID}}" style="--i:{{$i}}">
-        <span class="col-no" role="cell">{{entryNo $entry.ID}}</span>
+        <span class="col-no" role="cell"><a class="entry-no" href="/e/{{$entry.ID}}" title="Permalink to entry {{entryNo $entry.ID}}">{{entryNo $entry.ID}}</a></span>
         <span class="col-word" role="cell">
-          {{if $entry.PhotoURL}}<a class="entry-photo" href="{{$entry.PhotoURL}}" target="_blank" rel="noopener" title="Open photo"><img src="{{$entry.PhotoURL}}" alt="Photo attached to entry {{entryNo $entry.ID}}" loading="lazy" decoding="async"></a>{{end}}
+          {{if $entry.PhotoURL}}<a class="entry-photo" href="{{$entry.PhotoURL}}?size=display" target="_blank" rel="noopener" title="Open photo"><img src="{{$entry.PhotoURL}}?size=thumb" alt="Photo attached to entry {{entryNo $entry.ID}}" loading="lazy" decoding="async"></a>{{end}}
           {{if $entry.Word}}<span class="wrong">{{$entry.Word}}</span>{{end}}
         </span>
         <span class="col-meaning" role="cell">

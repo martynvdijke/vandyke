@@ -1,0 +1,94 @@
+{{define "permalink"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}Photo entry{{end}} · vanDyke</title>
+  <meta name="description" content="{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}A photo entry{{end}}, logged {{formatDate .Entry.CreatedAt}} in the vanDyke misspelling ledger.">
+  <link rel="canonical" href="{{.CanonicalURL}}">
+  <meta property="og:site_name" content="vanDyke">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}Photo entry{{end}}">
+  <meta property="og:description" content="Entry {{entryNo .Entry.ID}} in the LANCo misspelling ledger, logged {{formatDate .Entry.CreatedAt}}.">
+  <meta property="og:url" content="{{.CanonicalURL}}">
+  {{if .OGImage}}<meta property="og:image" content="{{.OGImage}}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="{{.OGImage}}">{{else}}<meta name="twitter:card" content="summary">{{end}}
+  <meta name="twitter:title" content="{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}Photo entry{{end}}">
+  <meta name="twitter:description" content="Entry {{entryNo .Entry.ID}} in the LANCo misspelling ledger.">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="wordmark" href="/">vanDyke</a>
+      <nav class="masthead-nav" aria-label="Main">
+        <a class="nav-link" href="/">The ledger</a>
+        <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme">
+          <span class="theme-dot" aria-hidden="true"></span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page permalink-page">
+    <article class="permalink-card">
+      <p class="eyebrow">Entry {{entryNo .Entry.ID}}</p>
+      {{if .Entry.Word}}<h1 class="permalink-word">{{.Entry.Word}}</h1>{{else}}<h1 class="permalink-word permalink-word-photo">Photo entry</h1>{{end}}
+      {{if .Entry.Meaning}}<p class="permalink-meaning"><span class="arrow" aria-hidden="true">→</span> {{.Entry.Meaning}}</p>{{end}}
+      {{if .Entry.PhotoURL}}
+      <figure class="permalink-photo">
+        <a href="{{.Entry.PhotoURL}}?size=display" target="_blank" rel="noopener">
+          <img src="{{.Entry.PhotoURL}}?size=display" alt="Photo attached to entry {{entryNo .Entry.ID}}" loading="eager" decoding="async">
+        </a>
+        <figcaption>A photograph of the slip, logged {{formatDate .Entry.CreatedAt}}.</figcaption>
+      </figure>
+      {{end}}
+      <time class="permalink-date" datetime="{{.Entry.CreatedAt.Format "2006-01-02T15:04:05Z"}}">Logged {{formatDate .Entry.CreatedAt}}</time>
+      <div class="permalink-actions">
+        <a class="btn btn-ghost" href="/">← Back to the ledger</a>
+        <button class="btn btn-primary" type="button" data-copy-link="{{.CanonicalURL}}">Copy link</button>
+      </div>
+    </article>
+  </main>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>{{end}}
+
+{{define "not-found"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · vanDyke</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="wordmark" href="/">vanDyke</a>
+      <nav class="masthead-nav" aria-label="Main"><a class="nav-link" href="/">The ledger</a></nav>
+    </div>
+  </header>
+  <main class="page permalink-page">
+    <article class="permalink-card permalink-error">
+      <p class="eyebrow">404</p>
+      <h1 class="permalink-word">{{.Title}}</h1>
+      <p class="permalink-meaning">{{.Message}}</p>
+      <div class="permalink-actions"><a class="btn btn-primary" href="/">Back to the ledger</a></div>
+    </article>
+  </main>
+</body>
+</html>{{end}}

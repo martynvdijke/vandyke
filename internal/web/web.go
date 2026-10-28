@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/store"
+	"vandyke.thor.edu/vandyke/internal/upload"
 )
 
 //go:embed templates/*.html
@@ -31,17 +31,18 @@ var staticFS embed.FS
 
 // Web serves the HTML UI.
 type Web struct {
-	store      *store.Store
-	limiter    *ratelimit.Limiter
-	trustProxy bool
-	umami      func() config.Umami
-	logger     *slog.Logger
-	tmpl       *template.Template
-	assets     http.Handler
+	store         *store.Store
+	limiter       *ratelimit.Limiter
+	trustProxy    bool
+	publicBaseURL string
+	umami         func() config.Umami
+	logger        *slog.Logger
+	tmpl          *template.Template
+	assets        http.Handler
 }
 
 // New parses templates and prepares the static asset handler.
-func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, trustProxy bool, logger *slog.Logger) (*Web, error) {
+func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, trustProxy bool, publicBaseURL string, logger *slog.Logger) (*Web, error) {
 	tmpl, err := template.New("vandyke").Funcs(template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			if t.IsZero() {
@@ -69,13 +70,14 @@ func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami,
 	}
 
 	return &Web{
-		store:      st,
-		limiter:    limiter,
-		trustProxy: trustProxy,
-		umami:      umami,
-		logger:     logger,
-		tmpl:       tmpl,
-		assets:     http.FileServer(http.FS(sub)),
+		store:         st,
+		limiter:       limiter,
+		trustProxy:    trustProxy,
+		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
+		umami:         umami,
+		logger:        logger,
+		tmpl:          tmpl,
+		assets:        http.FileServer(http.FS(sub)),
 	}, nil
 }
 
@@ -83,6 +85,7 @@ func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami,
 func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", w.handleIndex)
 	mux.HandleFunc("GET /entries", w.handleLedger)
+	mux.HandleFunc("GET /e/{id}", w.handlePermalink)
 	mux.HandleFunc("POST /entries", w.handleCreate)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheable(w.assets)))
 }
@@ -104,6 +107,7 @@ type pageData struct {
 type ledgerData struct {
 	Entries   []store.Entry
 	Query     ledgerQuery
+	Years     []int
 	Total     int
 	Pages     int
 	From      int
@@ -112,11 +116,13 @@ type ledgerData struct {
 }
 
 type ledgerQuery struct {
-	Q       string
-	Sort    string
-	Order   string
-	Page    int
-	PerPage int
+	Q         string
+	Sort      string
+	Order     string
+	Page      int
+	PerPage   int
+	PhotoOnly bool
+	Year      int
 }
 
 type pageLink struct {
@@ -124,6 +130,21 @@ type pageLink struct {
 	URL    string
 	Active bool
 	Gap    bool
+}
+
+type permalinkData struct {
+	Umami        config.Umami
+	Entry        store.Entry
+	CanonicalURL string
+	OGImage      string
+	Year         int
+}
+
+type errorData struct {
+	Umami   config.Umami
+	Title   string
+	Message string
+	Year    int
 }
 
 func (q ledgerQuery) values() url.Values {
@@ -134,6 +155,12 @@ func (q ledgerQuery) values() url.Values {
 	v.Set("sort", q.Sort)
 	v.Set("order", q.Order)
 	v.Set("per_page", strconv.Itoa(q.PerPage))
+	if q.PhotoOnly {
+		v.Set("photo", "1")
+	}
+	if q.Year > 0 {
+		v.Set("year", strconv.Itoa(q.Year))
+	}
 	return v
 }
 
@@ -204,6 +231,68 @@ func (w *Web) handleLedger(rw http.ResponseWriter, r *http.Request) {
 	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger})
 }
 
+func (w *Web) handlePermalink(rw http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		w.renderNotFound(rw)
+		return
+	}
+	entry, err := w.store.GetEntry(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		w.renderNotFound(rw)
+		return
+	}
+	if err != nil {
+		w.renderInternalError(rw, err)
+		return
+	}
+
+	canonical := w.absoluteURL(r, fmt.Sprintf("/e/%d", entry.ID))
+	image := ""
+	if entry.PhotoURL != "" {
+		image = w.absoluteURL(r, entry.PhotoURL+"?size=display")
+	}
+	w.render(rw, http.StatusOK, "permalink", permalinkData{
+		Umami:        w.umami(),
+		Entry:        entry,
+		CanonicalURL: canonical,
+		OGImage:      image,
+		Year:         time.Now().Year(),
+	})
+}
+
+func (w *Web) renderNotFound(rw http.ResponseWriter) {
+	w.render(rw, http.StatusNotFound, "not-found", errorData{
+		Umami:   w.umami(),
+		Title:   "Entry not found",
+		Message: "That slip is not in the ledger. It may have been removed, or the link may be wrong.",
+		Year:    time.Now().Year(),
+	})
+}
+
+func (w *Web) absoluteURL(r *http.Request, path string) string {
+	if w.publicBaseURL != "" {
+		return w.publicBaseURL + path
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if w.trustProxy {
+		switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))) {
+		case "https":
+			scheme = "https"
+		case "http":
+			scheme = "http"
+		}
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost"
+	}
+	return scheme + "://" + host + path
+}
+
 func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 	isHTMX := r.Header.Get("HX-Request") != ""
 	ip := httpx.ClientIP(r, w.trustProxy)
@@ -243,7 +332,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 	var photo *store.Photo
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
 		var photoErr error
-		photo, photoErr = uploadedPhoto(r)
+		photo, photoErr = upload.Photo(r, "photo")
 		if photoErr != nil {
 			message := capitalize(photoErr.Error())
 			if isHTMX {
@@ -324,15 +413,22 @@ func (w *Web) buildLedger(r *http.Request) (ledgerData, error) {
 	if err != nil {
 		return ledgerData{}, err
 	}
+	years, err := w.store.EntryYears(r.Context())
+	if err != nil {
+		return ledgerData{}, err
+	}
 	d := ledgerData{
 		Entries: page.Entries,
 		Query: ledgerQuery{
-			Q:       params.Query,
-			Sort:    params.Sort,
-			Order:   params.Order,
-			Page:    page.Page,
-			PerPage: page.PerPage,
+			Q:         params.Query,
+			Sort:      params.Sort,
+			Order:     params.Order,
+			Page:      page.Page,
+			PerPage:   page.PerPage,
+			PhotoOnly: params.HasPhoto != nil && *params.HasPhoto,
+			Year:      params.Year,
 		},
+		Years: years,
 		Total: page.Total,
 		Pages: page.Pages,
 	}
@@ -347,12 +443,28 @@ func (w *Web) buildLedger(r *http.Request) (ledgerData, error) {
 func parseListParams(r *http.Request) store.ListParams {
 	_ = r.ParseForm()
 	return store.ListParams{
-		Query:   r.FormValue("q"),
-		Sort:    r.FormValue("sort"),
-		Order:   r.FormValue("order"),
-		Page:    formInt(r, "page", 1),
-		PerPage: formInt(r, "per_page", store.DefaultPerPage),
+		Query:    r.FormValue("q"),
+		Sort:     r.FormValue("sort"),
+		Order:    r.FormValue("order"),
+		Page:     formInt(r, "page", 1),
+		PerPage:  formInt(r, "per_page", store.DefaultPerPage),
+		HasPhoto: formOptionalBool(r, "photo", "filter_photo"),
+		Year:     formInt(r, "year", 0),
 	}
+}
+
+func formOptionalBool(r *http.Request, keys ...string) *bool {
+	for _, key := range keys {
+		switch strings.ToLower(strings.TrimSpace(r.FormValue(key))) {
+		case "1", "true", "yes":
+			value := true
+			return &value
+		case "0", "false", "no":
+			value := false
+			return &value
+		}
+	}
+	return nil
 }
 
 func formInt(r *http.Request, key string, fallback int) int {
@@ -401,26 +513,6 @@ func buildPageLinks(current, total int, href func(int) string) []pageLink {
 		add(total)
 	}
 	return links
-}
-
-func uploadedPhoto(r *http.Request) (*store.Photo, error) {
-	file, _, err := r.FormFile("photo")
-	if errors.Is(err, http.ErrMissingFile) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, errors.New("could not read the photo")
-	}
-	defer func() { _ = file.Close() }()
-
-	data, err := io.ReadAll(io.LimitReader(file, store.MaxPhotoBytes+1))
-	if err != nil {
-		return nil, errors.New("could not read the photo")
-	}
-	if len(data) == 0 {
-		return nil, nil
-	}
-	return store.NewPhoto(data)
 }
 
 func (w *Web) renderFormError(rw http.ResponseWriter, message string) {

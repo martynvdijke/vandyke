@@ -35,8 +35,11 @@
     {{if .Entry.PhotoURL}}
     <div class="admin-current-photo">
       <span class="field-label">Current photo</span>
-      <a class="admin-photo-large" href="{{.Entry.PhotoURL}}" target="_blank" rel="noopener"><img src="{{.Entry.PhotoURL}}" alt="Current photo for entry {{entryNo .Entry.ID}}"></a>
-      <label class="admin-check"><input type="checkbox" name="remove_photo" value="1"{{if .FormRemove}} checked{{end}}> <span>Remove this photo</span></label>
+      <a class="admin-photo-large" href="{{.Entry.PhotoURL}}?size=display" target="_blank" rel="noopener"><img src="{{.Entry.PhotoURL}}?size=display" alt="Current photo for entry {{entryNo .Entry.ID}}"></a>
+      <div class="admin-photo-meta">
+        <label class="admin-check"><input type="checkbox" name="remove_photo" value="1"{{if .FormRemove}} checked{{end}}> <span>Remove this photo</span></label>
+        <a class="admin-photo-original" href="/admin/entries/{{.Entry.ID}}/photo/original">Download original</a>
+      </div>
     </div>
     {{end}}
 

@@ -16,11 +16,18 @@ services required.
 - **All original data, seeded** — the 100 entries from the original site
   (October 2017 → March 2026) are embedded in the binary and imported into
   SQLite on first start.
-- **JSON REST API** — list, search, sort, paginate and add entries; stats and a
-  health endpoint. See [API](#api).
+- **JSON REST API** — list, search, filter, sort, paginate and add entries;
+  stats and a health endpoint. See [API](#api).
 - **Add entries from the web or the API** — text entries or photos of a
   misspelling, protected by a per-IP token bucket (default: 10 additions per
-  hour, burst of 5).
+  hour, burst of 5). The add dialog opens the camera directly on mobile.
+- **Fast, private photos** — uploads keep an admin-only original, while the
+  public ledger gets a resized display image and a small thumbnail. EXIF
+  metadata is removed and oversized dimensions are rejected.
+- **Partial search and filters** — SQLite FTS5 trigram search finds fragments
+  like `euten` inside `feutenreus`; filter by photo and year.
+- **Stable permalinks** — every entry has a page at `/e/{id}` with Open Graph
+  and Twitter metadata for clean link previews, plus a copy-link button.
 - **Admin ledger** — sign in to edit every field, replace or remove photos,
   correct logged dates, and delete entries individually or in bulk. Public
   additions stay open; only editing and deletion require an admin.
@@ -80,6 +87,7 @@ Compose). See [`.env.example`](.env.example).
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP port. |
 | `DB_PATH` | `./data/vandyke.db` | SQLite database path; the directory is created automatically. |
+| `PUBLIC_BASE_URL` | *(derived)* | Optional absolute base URL, e.g. `https://vandyke.example.com`, used for canonical and Open Graph URLs. Derived from the request when empty. |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a proxy you control). |
 | `ADD_RATE_LIMIT_PER_HOUR` | `10` | Additions allowed per IP per hour. |
 | `ADD_RATE_LIMIT_BURST` | `5` | Short-term burst allowance per IP. |
@@ -105,10 +113,10 @@ stable envelope:
 
 | Method & path | Description |
 | --- | --- |
-| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30). |
+| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`). |
 | `GET /api/v1/entries/{id}` | Single entry. `404` when missing. |
 | `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning` and an optional `photo` file. `201` with `Location`; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
-| `GET /api/v1/entries/{id}/photo` | The entry's photo (`image/jpeg`, `image/png`, `image/gif` or `image/webp`). `404` when the entry has no photo. |
+| `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo. The original upload is available only to admins. |
 | `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`. |
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
 
@@ -116,7 +124,9 @@ Examples:
 
 ```sh
 curl -s 'localhost:8080/api/v1/entries?q=boeke&per_page=5'
+curl -s 'localhost:8080/api/v1/entries?photo=1&year=2026'
 curl -s localhost:8080/api/v1/entries/1
+curl -s -o thumb.jpg 'localhost:8080/api/v1/entries/1/photo?size=thumb'
 curl -s localhost:8080/api/v1/stats
 curl -s -X POST localhost:8080/api/v1/entries \
   -H 'Content-Type: application/json' \
@@ -128,8 +138,20 @@ curl -s -X POST localhost:8080/api/v1/entries \
 Validation: without a photo, `word` is 1–200 characters and `meaning` is 1–500
 characters; both are trimmed. Entries created with a photo may leave the text
 fields empty, so a photo alone is a valid entry. Photos must be JPEG, PNG, GIF
-or WebP and at most 10 MB; they are stored in SQLite and returned as `photo_url`
-on the entry. Duplicates are allowed, exactly as on the original site.
+or WebP and at most 10 MB; images above 12,000 pixels per side or 40 megapixels
+are rejected. Uploads are stored in SQLite as the original plus a display image
+(max 1600 px) and thumbnail (max 320 px). The public variants are re-encoded as
+JPEG without EXIF metadata; the original is retained for admin download. Entries
+return `photo_url` when they have a photo. Duplicates are allowed, exactly as on
+the original site.
+
+## Permalinks
+
+Every entry has a stable public page at `/e/{id}`. The page shows the full
+entry, its date and photo, and includes Open Graph/Twitter metadata for link
+previews plus a copy-link button. Entry numbers in the ledger link to their
+permalink. Set `PUBLIC_BASE_URL` behind a reverse proxy so canonical and social
+URLs use the public hostname; otherwise they are derived from the request.
 
 ## Admin and authentication
 
@@ -213,6 +235,7 @@ internal/store/        SQLite store, migrations, embedded seed data
 internal/auth/         password hashing, sessions, OIDC
 internal/admin/        authenticated admin interface under /admin
 internal/settings/     runtime Umami settings with env fallback
+internal/media/        photo derivatives, EXIF stripping and backfill
 internal/ratelimit/    per-IP token bucket
 internal/httpx/        shared HTTP helpers (client IP, JSON envelopes, logging)
 internal/httpapi/      REST API under /api/v1
@@ -239,12 +262,14 @@ and a CSP tailored to the effective Umami settings.
 go test ./...
 ```
 
-The suite covers the store (seeding, search with escaped wildcards, sorting,
-pagination, validation, stats, admin/session lifecycle, entry edits and bulk
-deletes, settings), password hashing and OIDC discovery/token verification, the
-rate limiter, the JSON API, the admin flows (setup, login, CSRF, edit, delete,
+The suite covers the store (seeding, FTS partial search, filters, search-index
+updates, sorting, pagination, validation, stats, admin/session lifecycle, entry
+edits and bulk deletes, settings), photo derivatives and backfill, password
+hashing and OIDC discovery/token verification, the rate limiter, the JSON API,
+the admin flows (setup, login, CSRF, edit, delete, original photo download,
 Umami settings), and the public web layer (partial rendering, HTMX flows, no-JS
-flows, rate-limit errors, Umami injection, cache headers).
+flows, permalinks and Open Graph metadata, rate-limit errors, Umami injection,
+cache headers).
 
 The TRMNL transforms have their own stdlib-only Python tests:
 

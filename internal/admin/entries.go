@@ -23,16 +23,19 @@ type pageData struct {
 }
 
 type ledgerData struct {
-	Entries []store.Entry
-	Q       string
-	Sort    string
-	Order   string
-	Page    int
-	Pages   int
-	PerPage int
-	From    int
-	To      int
-	Total   int
+	Entries   []store.Entry
+	Years     []int
+	Q         string
+	Sort      string
+	Order     string
+	Page      int
+	Pages     int
+	PerPage   int
+	From      int
+	To        int
+	Total     int
+	PhotoOnly bool
+	Year      int
 }
 
 type editData struct {
@@ -80,15 +83,22 @@ func (a *Admin) buildLedger(r *http.Request) (ledgerData, error) {
 	if err != nil {
 		return ledgerData{}, err
 	}
+	years, err := a.store.EntryYears(r.Context())
+	if err != nil {
+		return ledgerData{}, err
+	}
 	d := ledgerData{
-		Entries: page.Entries,
-		Q:       params.Query,
-		Sort:    params.Sort,
-		Order:   params.Order,
-		Page:    page.Page,
-		Pages:   page.Pages,
-		PerPage: page.PerPage,
-		Total:   page.Total,
+		Entries:   page.Entries,
+		Years:     years,
+		Q:         params.Query,
+		Sort:      params.Sort,
+		Order:     params.Order,
+		Page:      page.Page,
+		Pages:     page.Pages,
+		PerPage:   page.PerPage,
+		Total:     page.Total,
+		PhotoOnly: params.HasPhoto != nil && *params.HasPhoto,
+		Year:      params.Year,
 	}
 	if page.Total > 0 && len(page.Entries) > 0 {
 		d.From = (page.Page-1)*page.PerPage + 1
@@ -100,12 +110,26 @@ func (a *Admin) buildLedger(r *http.Request) (ledgerData, error) {
 func parseAdminListParams(r *http.Request) store.ListParams {
 	_ = r.ParseForm()
 	return store.ListParams{
-		Query:   r.FormValue("q"),
-		Sort:    r.FormValue("sort"),
-		Order:   r.FormValue("order"),
-		Page:    adminFormInt(r, "page", 1),
-		PerPage: adminFormInt(r, "per_page", store.DefaultPerPage),
+		Query:    r.FormValue("q"),
+		Sort:     r.FormValue("sort"),
+		Order:    r.FormValue("order"),
+		Page:     adminFormInt(r, "page", 1),
+		PerPage:  adminFormInt(r, "per_page", store.DefaultPerPage),
+		HasPhoto: adminFormOptionalBool(r, "photo"),
+		Year:     adminFormInt(r, "year", 0),
 	}
+}
+
+func adminFormOptionalBool(r *http.Request, key string) *bool {
+	switch strings.ToLower(strings.TrimSpace(r.FormValue(key))) {
+	case "1", "true", "yes":
+		value := true
+		return &value
+	case "0", "false", "no":
+		value := false
+		return &value
+	}
+	return nil
 }
 
 func adminFormInt(r *http.Request, key string, fallback int) int {
@@ -128,6 +152,12 @@ func (d ledgerData) values() url.Values {
 	v.Set("sort", d.Sort)
 	v.Set("order", d.Order)
 	v.Set("per_page", strconv.Itoa(d.PerPage))
+	if d.PhotoOnly {
+		v.Set("photo", "1")
+	}
+	if d.Year > 0 {
+		v.Set("year", strconv.Itoa(d.Year))
+	}
 	return v
 }
 
@@ -180,6 +210,42 @@ func (d ledgerData) PageHX(n int) string {
 	v := d.values()
 	v.Set("page", strconv.Itoa(n))
 	return "/admin/entries?" + v.Encode()
+}
+
+func (a *Admin) handleOriginalPhoto(rw http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r.PathValue("id"))
+	if err != nil {
+		http.Error(rw, "invalid entry id", http.StatusBadRequest)
+		return
+	}
+	photo, err := a.store.GetEntryPhotoSize(r.Context(), id, "original")
+	if errors.Is(err, store.ErrNotFound) {
+		http.NotFound(rw, r)
+		return
+	}
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	rw.Header().Set("Content-Type", photo.ContentType)
+	rw.Header().Set("Content-Length", strconv.Itoa(len(photo.Data)))
+	rw.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fmt.Sprintf("entry-%04d%s", id, photoExtension(photo.ContentType))))
+	rw.Header().Set("Cache-Control", "no-store")
+	rw.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = rw.Write(photo.Data)
+}
+
+func photoExtension(contentType string) string {
+	switch contentType {
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".jpg"
+	}
 }
 
 func (a *Admin) handleEdit(rw http.ResponseWriter, r *http.Request) {

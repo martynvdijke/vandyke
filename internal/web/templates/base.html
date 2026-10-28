@@ -64,6 +64,17 @@
           <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5 L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <input type="search" name="q" value="{{.Ledger.Query.Q}}" placeholder="Search misspellings and corrections…" autocomplete="off" aria-label="Search the ledger">
         </label>
+        <label class="filter-toggle">
+          <input type="checkbox" name="photo" value="1"{{if .Ledger.Query.PhotoOnly}} checked{{end}}>
+          <span>Photos</span>
+        </label>
+        <label class="pagesize">
+          <span>Year</span>
+          <select name="year" aria-label="Filter by year">
+            <option value="">All</option>
+            {{range .Ledger.Years}}<option value="{{.}}"{{if eq . $.Ledger.Query.Year}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
         <label class="pagesize">
           <span>Rows</span>
           <select name="per_page" aria-label="Entries per page">

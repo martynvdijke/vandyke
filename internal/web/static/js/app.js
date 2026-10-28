@@ -134,6 +134,38 @@
       if (addDialog) addDialog.addEventListener("close", clearPhotoPreview);
     }
 
+    /* permalink copy button */
+    document.querySelectorAll("[data-copy-link]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var value = button.getAttribute("data-copy-link") || window.location.href;
+        function copied() {
+          toast("Link copied.");
+          track("permalink-copy", { url: value });
+        }
+        function fallback() {
+          var input = document.createElement("input");
+          input.value = value;
+          input.setAttribute("readonly", "");
+          input.style.position = "fixed";
+          input.style.opacity = "0";
+          document.body.appendChild(input);
+          input.select();
+          try {
+            document.execCommand("copy");
+            copied();
+          } catch (err) {
+            toast("Copy failed — select the address bar instead.");
+          }
+          input.remove();
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value).then(copied, fallback);
+        } else {
+          fallback();
+        }
+      });
+    });
+
     /* server-rendered toast after a no-JS form post */
     document.querySelectorAll(".toast-server").forEach(function (el) {
       window.setTimeout(function () {

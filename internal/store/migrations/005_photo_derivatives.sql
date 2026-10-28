@@ -1,0 +1,14 @@
+ALTER TABLE entry_photos ADD COLUMN width INTEGER;
+ALTER TABLE entry_photos ADD COLUMN height INTEGER;
+ALTER TABLE entry_photos ADD COLUMN display_content_type TEXT;
+ALTER TABLE entry_photos ADD COLUMN display_data BLOB;
+ALTER TABLE entry_photos ADD COLUMN display_sha256 TEXT;
+ALTER TABLE entry_photos ADD COLUMN display_size INTEGER;
+ALTER TABLE entry_photos ADD COLUMN display_width INTEGER;
+ALTER TABLE entry_photos ADD COLUMN display_height INTEGER;
+ALTER TABLE entry_photos ADD COLUMN thumb_content_type TEXT;
+ALTER TABLE entry_photos ADD COLUMN thumb_data BLOB;
+ALTER TABLE entry_photos ADD COLUMN thumb_sha256 TEXT;
+ALTER TABLE entry_photos ADD COLUMN thumb_size INTEGER;
+ALTER TABLE entry_photos ADD COLUMN thumb_width INTEGER;
+ALTER TABLE entry_photos ADD COLUMN thumb_height INTEGER;

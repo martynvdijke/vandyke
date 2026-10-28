@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/base64"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,7 +40,7 @@ func newAdminTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *htt
 	if err != nil {
 		t.Fatalf("admin.New: %v", err)
 	}
-	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, false, logger)
+	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, false, "", logger)
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -255,4 +257,89 @@ func mustGet(t *testing.T, client *http.Client, u string) string {
 		t.Fatalf("GET %s = %d", u, resp.StatusCode)
 	}
 	return body
+}
+
+const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("decode tiny png: %v", err)
+	}
+	return data
+}
+
+func TestAdminOriginalPhotoDownload(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	setupAdmin(t, srv, client)
+
+	png := tinyPNG(t)
+	photo, err := store.NewPhoto(png)
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "original", "photo", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	originalURL := srv.URL + "/admin/entries/" + itoa(entry.ID) + "/photo/original"
+
+	anon := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := anon.Get(originalURL)
+	if err != nil {
+		t.Fatalf("anonymous GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/admin/login") {
+		t.Fatalf("anonymous original = %d %q, want login redirect", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	authResp, body := get(t, client, originalURL)
+	if authResp.StatusCode != http.StatusOK {
+		t.Fatalf("original status = %d", authResp.StatusCode)
+	}
+	if got := authResp.Header.Get("Content-Disposition"); !strings.Contains(got, "attachment") || !strings.Contains(got, "entry-") {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	if body != string(png) {
+		t.Fatal("original download did not return the uploaded bytes")
+	}
+
+	resp, _ = get(t, client, srv.URL+"/admin/entries/999999/photo/original")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing original status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAdminFiltersRender(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	setupAdmin(t, srv, client)
+
+	png := tinyPNG(t)
+	photo, err := store.NewPhoto(png)
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	if _, err := st.CreateEntry(t.Context(), "filter", "photo", photo); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+
+	resp, body := get(t, client, srv.URL+"/admin?photo=1")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	for _, want := range []string{`name="photo" value="1" checked`, `name="year"`, "with photos"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin filter missing %q", want)
+		}
+	}
+}
+
+func itoa(n int64) string {
+	return strconv.FormatInt(n, 10)
 }

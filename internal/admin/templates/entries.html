@@ -23,6 +23,17 @@
       <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5 L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       <input type="search" name="q" value="{{.Ledger.Q}}" placeholder="Search entries…" autocomplete="off" aria-label="Search entries">
     </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="photo" value="1"{{if .Ledger.PhotoOnly}} checked{{end}}>
+      <span>Photos</span>
+    </label>
+    <label class="pagesize">
+      <span>Year</span>
+      <select name="year" aria-label="Filter by year">
+        <option value="">All</option>
+        {{range .Ledger.Years}}<option value="{{.}}"{{if eq . $.Ledger.Year}} selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </label>
     <label class="pagesize">
       <span>Rows</span>
       <select name="per_page" aria-label="Entries per page">
@@ -34,7 +45,7 @@
     <noscript><button class="btn btn-primary btn-small" type="submit">Search</button></noscript>
   </form>
 
-  <p class="admin-count">{{if .Ledger.Total}}Showing <strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong>{{else}}No entries{{end}}{{if .Ledger.Q}} for “{{.Ledger.Q}}”{{end}}</p>
+  <p class="admin-count">{{if .Ledger.Total}}Showing <strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong>{{else}}No entries{{end}}{{if .Ledger.Q}} for “{{.Ledger.Q}}”{{end}}{{if .Ledger.PhotoOnly}} with photos{{end}}{{if gt .Ledger.Year 0}} from {{.Ledger.Year}}{{end}}</p>
 
   {{if .Ledger.Entries}}
   <form id="bulk-form" method="post" action="/admin/entries/delete" data-bulk-form>
@@ -58,7 +69,7 @@
           <span class="admin-col-check" role="cell"><input type="checkbox" name="ids" value="{{$e.ID}}" aria-label="Select entry {{entryNo $e.ID}}"></span>
           <span class="admin-col-no" role="cell">{{entryNo $e.ID}}</span>
           <span class="admin-col-word" role="cell">
-            {{if $e.PhotoURL}}<a class="entry-photo admin-thumb" href="{{$e.PhotoURL}}" target="_blank" rel="noopener" title="Open photo"><img src="{{$e.PhotoURL}}" alt="" loading="lazy" decoding="async"></a>{{end}}
+            {{if $e.PhotoURL}}<a class="entry-photo admin-thumb" href="{{$e.PhotoURL}}?size=display" target="_blank" rel="noopener" title="Open photo"><img src="{{$e.PhotoURL}}?size=thumb" alt="" loading="lazy" decoding="async"></a>{{end}}
             {{if $e.Word}}<span class="wrong">{{$e.Word}}</span>{{else}}<span class="photo-note">photo entry</span>{{end}}
           </span>
           <span class="admin-col-meaning" role="cell">{{if $e.Meaning}}<span class="arrow" aria-hidden="true">→</span><span class="right">{{$e.Meaning}}</span>{{else}}<span class="photo-note">—</span>{{end}}</span>

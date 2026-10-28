@@ -6,6 +6,8 @@
     <input type="hidden" name="sort" value="{{.Ledger.Query.Sort}}">
     <input type="hidden" name="order" value="{{.Ledger.Query.Order}}">
     <input type="hidden" name="per_page" value="{{.Ledger.Query.PerPage}}">
+    <input type="hidden" name="filter_photo" value="{{if .Ledger.Query.PhotoOnly}}1{{end}}">
+    <input type="hidden" name="year" value="{{if gt .Ledger.Query.Year 0}}{{.Ledger.Query.Year}}{{end}}">
     <header class="dialog-head">
       <h2 id="add-dialog-title">Add to the ledger</h2>
       <button class="icon-btn" type="button" data-dialog-close aria-label="Close">×</button>
@@ -22,7 +24,7 @@
       </label>
       <label class="field">
         <span class="field-label">Photo <span class="field-optional">optional</span></span>
-        <input type="file" name="photo" accept="image/jpeg,image/png,image/gif,image/webp" aria-describedby="photo-hint">
+        <input type="file" name="photo" accept="image/jpeg,image/png,image/gif,image/webp" capture="environment" aria-describedby="photo-hint">
         <span id="photo-hint" class="field-hint">JPEG, PNG, GIF or WebP, up to 10&nbsp;MB. With a photo the text fields may be left empty.</span>
       </label>
       <div id="photo-preview" class="photo-preview" hidden>

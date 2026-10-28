@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/store"
+	"vandyke.thor.edu/vandyke/internal/upload"
 )
 
 const (
@@ -50,11 +50,13 @@ func (a *API) handleHealth(rw http.ResponseWriter, _ *http.Request) {
 
 func (a *API) handleListEntries(rw http.ResponseWriter, r *http.Request) {
 	page, err := a.store.ListEntries(r.Context(), store.ListParams{
-		Query:   r.URL.Query().Get("q"),
-		Sort:    r.URL.Query().Get("sort"),
-		Order:   r.URL.Query().Get("order"),
-		Page:    queryInt(r, "page", 1),
-		PerPage: queryInt(r, "per_page", store.DefaultPerPage),
+		Query:    r.URL.Query().Get("q"),
+		Sort:     r.URL.Query().Get("sort"),
+		Order:    r.URL.Query().Get("order"),
+		Page:     queryInt(r, "page", 1),
+		PerPage:  queryInt(r, "per_page", store.DefaultPerPage),
+		HasPhoto: queryOptionalBool(r, "photo"),
+		Year:     queryInt(r, "year", 0),
 	})
 	if err != nil {
 		a.logger.Error("list entries", "error", err)
@@ -129,7 +131,7 @@ func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
 	word := strings.TrimSpace(r.PostFormValue("word"))
 	meaning := strings.TrimSpace(r.PostFormValue("meaning"))
 
-	photo, err := uploadedPhoto(r, "photo")
+	photo, err := upload.Photo(r, "photo")
 	if err != nil {
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
@@ -153,33 +155,21 @@ func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, m
 	httpx.WriteJSON(rw, http.StatusCreated, entry)
 }
 
-func uploadedPhoto(r *http.Request, field string) (*store.Photo, error) {
-	file, _, err := r.FormFile(field)
-	if errors.Is(err, http.ErrMissingFile) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, errors.New("could not read the photo")
-	}
-	defer func() { _ = file.Close() }()
-
-	data, err := io.ReadAll(io.LimitReader(file, store.MaxPhotoBytes+1))
-	if err != nil {
-		return nil, errors.New("could not read the photo")
-	}
-	if len(data) == 0 {
-		return nil, nil
-	}
-	return store.NewPhoto(data)
-}
-
 func (a *API) handleGetEntryPhoto(rw http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
 		httpx.WriteError(rw, http.StatusBadRequest, "invalid_id", "id must be a positive integer")
 		return
 	}
-	photo, err := a.store.GetEntryPhoto(r.Context(), id)
+	size := strings.TrimSpace(r.URL.Query().Get("size"))
+	if size == "" {
+		size = "display"
+	}
+	if size != "display" && size != "thumb" {
+		httpx.WriteError(rw, http.StatusBadRequest, "invalid_size", "size must be display or thumb")
+		return
+	}
+	photo, err := a.store.GetEntryPhotoSize(r.Context(), id, size)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		httpx.WriteError(rw, http.StatusNotFound, "not_found", "entry photo does not exist")
@@ -240,4 +230,13 @@ func queryInt(r *http.Request, key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func queryOptionalBool(r *http.Request, key string) *bool {
+	raw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get(key)))
+	if raw == "" {
+		return nil
+	}
+	value := raw == "1" || raw == "true" || raw == "yes"
+	return &value
 }

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Umami holds self-hosted analytics settings. Analytics is enabled only when
@@ -52,6 +53,7 @@ type Config struct {
 	AdminSetupToken         string
 	AdminLoginRatePerMinute float64
 	AdminLoginRateBurst     int
+	PublicBaseURL           string
 	Umami                   Umami
 	OIDC                    OIDC
 }
@@ -90,6 +92,14 @@ func Load() (Config, error) {
 	}
 	if cfg.AdminLoginRateBurst, err = getenvInt("ADMIN_LOGIN_RATE_BURST", 5); err != nil {
 		return Config{}, err
+	}
+	if raw := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); raw != "" {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return Config{}, fmt.Errorf("PUBLIC_BASE_URL: expected an absolute http or https URL, got %q", raw)
+		}
+		cfg.PublicBaseURL = strings.TrimRight(parsed.String(), "/")
 	}
 	return cfg, nil
 }

@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -268,8 +272,8 @@ func TestCreateEntryWithPhoto(t *testing.T) {
 	if photoResp.StatusCode != http.StatusOK {
 		t.Fatalf("photo status = %d, want 200", photoResp.StatusCode)
 	}
-	if got := photoResp.Header.Get("Content-Type"); got != "image/png" {
-		t.Fatalf("photo content type = %q, want image/png", got)
+	if got := photoResp.Header.Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("photo content type = %q, want image/jpeg", got)
 	}
 	if got := photoResp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Fatalf("photo nosniff = %q", got)
@@ -278,8 +282,12 @@ func TestCreateEntryWithPhoto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read photo: %v", err)
 	}
-	if !bytes.Equal(body, png) {
-		t.Fatalf("photo bytes differ from upload")
+	if bytes.Equal(body, png) {
+		t.Fatalf("photo bytes should be a processed derivative")
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(body))
+	if err != nil || cfg.Width != 1 || cfg.Height != 1 {
+		t.Fatalf("photo derivative = %dx%d, err %v; want 1x1 JPEG", cfg.Width, cfg.Height, err)
 	}
 }
 
@@ -411,4 +419,97 @@ func TestSecurityHeadersAppliedByMiddleware(t *testing.T) {
 
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
+}
+
+func widePNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 80, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestEntryPhotoSizes(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	resp := postPhotoEntry(t, srv, map[string]string{"word": "groot", "meaning": "large"}, "slip.png", widePNG(t, 800, 400))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var entry store.Entry
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	displayResp, err := http.Get(srv.URL + entry.PhotoURL)
+	if err != nil {
+		t.Fatalf("GET display: %v", err)
+	}
+	defer displayResp.Body.Close()
+	displayBody, _ := io.ReadAll(displayResp.Body)
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(displayBody))
+	if err != nil || cfg.Width != 800 || cfg.Height != 400 {
+		t.Fatalf("display = %dx%d, err %v; want 800x400 JPEG", cfg.Width, cfg.Height, err)
+	}
+
+	thumbResp, err := http.Get(srv.URL + entry.PhotoURL + "?size=thumb")
+	if err != nil {
+		t.Fatalf("GET thumb: %v", err)
+	}
+	defer thumbResp.Body.Close()
+	if thumbResp.StatusCode != http.StatusOK {
+		t.Fatalf("thumb status = %d", thumbResp.StatusCode)
+	}
+	thumbBody, _ := io.ReadAll(thumbResp.Body)
+	cfg, err = jpeg.DecodeConfig(bytes.NewReader(thumbBody))
+	if err != nil || cfg.Width != 320 || cfg.Height != 160 {
+		t.Fatalf("thumb = %dx%d, err %v; want 320x160 JPEG", cfg.Width, cfg.Height, err)
+	}
+	if displayResp.Header.Get("ETag") == thumbResp.Header.Get("ETag") {
+		t.Fatal("display and thumb should have distinct ETags")
+	}
+
+	invalid, err := http.Get(srv.URL + entry.PhotoURL + "?size=huge")
+	if err != nil {
+		t.Fatalf("GET invalid size: %v", err)
+	}
+	defer invalid.Body.Close()
+	if invalid.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid size status = %d, want 400", invalid.StatusCode)
+	}
+	if body := decodeError(t, invalid); body.Error.Code != "invalid_size" {
+		t.Fatalf("invalid size code = %q", body.Error.Code)
+	}
+}
+
+func TestListEntryFilters(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	resp := postPhotoEntry(t, srv, map[string]string{"word": "filter", "meaning": "photo"}, "slip.png", tinyPNG(t))
+	resp.Body.Close()
+
+	var page store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?photo=1&per_page=100", &page)
+	if page.Total != 1 || len(page.Entries) != 1 || page.Entries[0].PhotoURL == "" {
+		t.Fatalf("photo filter page = %+v, want one photo entry", page)
+	}
+
+	var year store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?year=2026&per_page=100", &year)
+	if year.Total == 0 {
+		t.Fatal("year filter returned no entries")
+	}
+	for _, entry := range year.Entries {
+		if entry.CreatedAt.Year() != 2026 {
+			t.Fatalf("year filter returned %v", entry.CreatedAt)
+		}
+	}
 }

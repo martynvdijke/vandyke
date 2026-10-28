@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"vandyke.thor.edu/vandyke/internal/media"
 	"vandyke.thor.edu/vandyke/internal/store"
 )
 
@@ -27,5 +28,12 @@ func Photo(r *http.Request, field string) (*store.Photo, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	return store.NewPhoto(data)
+	photo, err := store.NewPhoto(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := media.Derive(photo); err != nil {
+		return nil, err
+	}
+	return photo, nil
 }

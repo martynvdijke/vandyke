@@ -63,8 +63,33 @@ type Entry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Photo is image evidence attached to an entry.
+// Photo is image evidence attached to an entry. The original bytes are kept
+// for administrators; Display and Thumb are metadata-free derivatives served
+// to the public.
 type Photo struct {
+	ContentType string
+	Data        []byte
+	SHA256      string
+	Size        int
+	Width       int
+	Height      int
+	Display     *PhotoVariant
+	Thumb       *PhotoVariant
+}
+
+// PhotoVariant is one processed version of an entry photo.
+type PhotoVariant struct {
+	ContentType string
+	Data        []byte
+	SHA256      string
+	Size        int
+	Width       int
+	Height      int
+}
+
+// PhotoBackfill describes an existing photo that still needs derivatives.
+type PhotoBackfill struct {
+	EntryID     int64
 	ContentType string
 	Data        []byte
 	SHA256      string
@@ -114,11 +139,13 @@ func photoURL(id int64) string {
 
 // ListParams describes a ledger query.
 type ListParams struct {
-	Query   string
-	Sort    string
-	Order   string
-	Page    int
-	PerPage int
+	Query    string
+	Sort     string
+	Order    string
+	Page     int
+	PerPage  int
+	HasPhoto *bool
+	Year     int
 }
 
 // Page is a paginated slice of entries.
@@ -188,6 +215,9 @@ func NormalizeListParams(p ListParams) ListParams {
 	}
 	if p.PerPage > MaxPerPage {
 		p.PerPage = MaxPerPage
+	}
+	if p.Year < 1000 || p.Year > 9999 {
+		p.Year = 0
 	}
 	return p
 }
@@ -336,9 +366,19 @@ func (s *Store) seedIfEmpty(ctx context.Context) error {
 	defer func() { _ = stmt.Close() }()
 
 	for _, row := range rows {
-		if _, err := stmt.ExecContext(ctx, row.Word, row.Meaning, row.CreatedAt); err != nil {
+		res, err := stmt.ExecContext(ctx, row.Word, row.Meaning, row.CreatedAt)
+		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("seed entry %q: %w", row.Word, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("seed entry id %q: %w", row.Word, err)
+		}
+		if err := indexEntry(ctx, tx, id, row.Word, row.Meaning); err != nil {
+			_ = tx.Rollback()
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -351,13 +391,7 @@ func (s *Store) seedIfEmpty(ctx context.Context) error {
 func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error) {
 	p := NormalizeListParams(params)
 
-	where := ""
-	args := make([]any, 0, 2)
-	if p.Query != "" {
-		pattern := "%" + escapeLike(p.Query) + "%"
-		where = ` WHERE (e.word LIKE ? ESCAPE '\' OR e.meaning LIKE ? ESCAPE '\')`
-		args = append(args, pattern, pattern)
-	}
+	where, args := ledgerFilter(p)
 
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries e`+where, args...).Scan(&total); err != nil {
@@ -402,6 +436,115 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 	return Page{Entries: entries, Total: total, Page: p.Page, PerPage: p.PerPage, Pages: pages}, nil
 }
 
+// ledgerFilter builds the shared WHERE clause for listing and counting entries.
+func ledgerFilter(p ListParams) (string, []any) {
+	var clauses []string
+	args := make([]any, 0, 4)
+
+	if p.Query != "" {
+		if match := ftsMatch(p.Query); match != "" {
+			clauses = append(clauses, `e.id IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`)
+			args = append(args, match)
+		} else {
+			pattern := "%" + escapeLike(p.Query) + "%"
+			clauses = append(clauses, `(e.word LIKE ? ESCAPE '\' OR e.meaning LIKE ? ESCAPE '\')`)
+			args = append(args, pattern, pattern)
+		}
+	}
+	if p.HasPhoto != nil {
+		if *p.HasPhoto {
+			clauses = append(clauses, `EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)`)
+		} else {
+			clauses = append(clauses, `NOT EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)`)
+		}
+	}
+	if p.Year > 0 {
+		clauses = append(clauses, `e.created_at >= ? AND e.created_at < ?`)
+		args = append(args,
+			fmt.Sprintf("%04d-01-01T00:00:00Z", p.Year),
+			fmt.Sprintf("%04d-01-01T00:00:00Z", p.Year+1),
+		)
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// ftsMatch turns a user query into a safe FTS5 trigram expression. It returns
+// "" when any token is shorter than the trigram minimum, in which case the
+// caller uses the LIKE fallback.
+func ftsMatch(query string) string {
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if len([]rune(field)) < 3 {
+			return ""
+		}
+		parts = append(parts, `"`+strings.ReplaceAll(field, `"`, `""`)+`"`)
+	}
+	return strings.Join(parts, " AND ")
+}
+
+// EntryYears returns the distinct years that contain ledger entries, newest first.
+func (s *Store) EntryYears(ctx context.Context) ([]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT CAST(strftime('%Y', created_at) AS INTEGER) AS year
+		FROM entries ORDER BY year DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query entry years: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var years []int
+	for rows.Next() {
+		var year int
+		if err := rows.Scan(&year); err != nil {
+			return nil, fmt.Errorf("scan entry year: %w", err)
+		}
+		years = append(years, year)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate entry years: %w", err)
+	}
+	return years, nil
+}
+
+// indexEntry keeps the trigram search index in sync with an entry.
+func indexEntry(ctx context.Context, tx *sql.Tx, id int64, word, meaning string) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO entries_fts(rowid, word, meaning) VALUES (?, ?, ?)`, id, word, meaning,
+	); err != nil {
+		return fmt.Errorf("index entry: %w", err)
+	}
+	return nil
+}
+
+// RebuildSearchIndex recreates the trigram index from the entries table.
+func (s *Store) RebuildSearchIndex(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin search rebuild: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entries_fts`); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("clear search index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO entries_fts(rowid, word, meaning) SELECT id, word, meaning FROM entries`,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("rebuild search index: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit search rebuild: %w", err)
+	}
+	return nil
+}
+
 // GetEntry returns a single entry by ID.
 func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.created_at,
@@ -414,12 +557,39 @@ func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
 	return entry, err
 }
 
-// GetEntryPhoto returns the photo attached to an entry.
+// GetEntryPhoto returns the original photo attached to an entry.
 func (s *Store) GetEntryPhoto(ctx context.Context, id int64) (Photo, error) {
+	return s.GetEntryPhotoSize(ctx, id, "original")
+}
+
+// GetEntryPhotoSize returns the requested photo variant. Unknown sizes fall
+// back to the clean display image, and missing derivatives fall back to the
+// original.
+func (s *Store) GetEntryPhotoSize(ctx context.Context, id int64, size string) (Photo, error) {
+	var query string
+	switch size {
+	case "original":
+		query = `SELECT content_type, data, sha256, size, COALESCE(width, 0), COALESCE(height, 0)
+			FROM entry_photos WHERE entry_id = ?`
+	case "thumb":
+		query = `SELECT COALESCE(thumb_content_type, display_content_type, content_type),
+			COALESCE(thumb_data, display_data, data),
+			COALESCE(thumb_sha256, display_sha256, sha256),
+			COALESCE(thumb_size, display_size, size),
+			COALESCE(thumb_width, display_width, width, 0),
+			COALESCE(thumb_height, display_height, height, 0)
+			FROM entry_photos WHERE entry_id = ?`
+	default:
+		query = `SELECT COALESCE(display_content_type, content_type),
+			COALESCE(display_data, data),
+			COALESCE(display_sha256, sha256),
+			COALESCE(display_size, size),
+			COALESCE(display_width, width, 0),
+			COALESCE(display_height, height, 0)
+			FROM entry_photos WHERE entry_id = ?`
+	}
 	var photo Photo
-	err := s.db.QueryRowContext(ctx,
-		`SELECT content_type, data, sha256, size FROM entry_photos WHERE entry_id = ?`, id,
-	).Scan(&photo.ContentType, &photo.Data, &photo.SHA256, &photo.Size)
+	err := s.db.QueryRowContext(ctx, query, id).Scan(&photo.ContentType, &photo.Data, &photo.SHA256, &photo.Size, &photo.Width, &photo.Height)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Photo{}, ErrNotFound
 	}
@@ -427,6 +597,72 @@ func (s *Store) GetEntryPhoto(ctx context.Context, id int64) (Photo, error) {
 		return Photo{}, fmt.Errorf("query entry photo: %w", err)
 	}
 	return photo, nil
+}
+
+// ListPhotosMissingDerivatives returns photos that predate the derivative
+// pipeline so they can be processed once.
+func (s *Store) ListPhotosMissingDerivatives(ctx context.Context) ([]PhotoBackfill, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT entry_id, content_type, data, sha256, size FROM entry_photos
+		WHERE display_data IS NULL OR thumb_data IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("query photos needing derivatives: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var photos []PhotoBackfill
+	for rows.Next() {
+		var photo PhotoBackfill
+		if err := rows.Scan(&photo.EntryID, &photo.ContentType, &photo.Data, &photo.SHA256, &photo.Size); err != nil {
+			return nil, fmt.Errorf("scan photo needing derivatives: %w", err)
+		}
+		photos = append(photos, photo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate photos needing derivatives: %w", err)
+	}
+	return photos, nil
+}
+
+// SetPhotoDerivatives stores processed variants for an existing photo.
+func (s *Store) SetPhotoDerivatives(ctx context.Context, id int64, width, height int, display, thumb PhotoVariant) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE entry_photos SET width = ?, height = ?,
+			display_content_type = ?, display_data = ?, display_sha256 = ?, display_size = ?,
+			display_width = ?, display_height = ?,
+			thumb_content_type = ?, thumb_data = ?, thumb_sha256 = ?, thumb_size = ?,
+			thumb_width = ?, thumb_height = ?
+		WHERE entry_id = ?`,
+		width, height,
+		display.ContentType, display.Data, display.SHA256, display.Size, display.Width, display.Height,
+		thumb.ContentType, thumb.Data, thumb.SHA256, thumb.Size, thumb.Width, thumb.Height,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("store photo derivatives: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("photo derivative rows: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func photoInsertArgs(id int64, photo *Photo) []any {
+	args := []any{id, photo.ContentType, photo.Data, photo.SHA256, photo.Size, photo.Width, photo.Height}
+	args = appendVariantArgs(args, photo.Display)
+	args = appendVariantArgs(args, photo.Thumb)
+	return args
+}
+
+func appendVariantArgs(args []any, variant *PhotoVariant) []any {
+	if variant == nil {
+		return append(args, nil, nil, nil, nil, nil, nil)
+	}
+	return append(args, variant.ContentType, variant.Data, variant.SHA256, variant.Size, variant.Width, variant.Height)
 }
 
 // CreateEntry validates and inserts a new ledger entry, optionally with a photo.
@@ -453,12 +689,19 @@ func (s *Store) CreateEntry(ctx context.Context, word, meaning string, photo *Ph
 	}
 	if photo != nil {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size) VALUES (?, ?, ?, ?, ?)`,
-			id, photo.ContentType, photo.Data, photo.SHA256, photo.Size,
+			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size, width, height,
+				display_content_type, display_data, display_sha256, display_size, display_width, display_height,
+				thumb_content_type, thumb_data, thumb_sha256, thumb_size, thumb_width, thumb_height)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			photoInsertArgs(id, photo)...,
 		); err != nil {
 			_ = tx.Rollback()
 			return Entry{}, fmt.Errorf("insert entry photo: %w", err)
 		}
+	}
+	if err := indexEntry(ctx, tx, id, word, meaning); err != nil {
+		_ = tx.Rollback()
+		return Entry{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Entry{}, fmt.Errorf("commit entry insert: %w", err)
@@ -821,10 +1064,20 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 	switch {
 	case update.Photo != nil:
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size) VALUES (?, ?, ?, ?, ?)
+			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size, width, height,
+				display_content_type, display_data, display_sha256, display_size, display_width, display_height,
+				thumb_content_type, thumb_data, thumb_sha256, thumb_size, thumb_width, thumb_height)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(entry_id) DO UPDATE SET content_type = excluded.content_type,
-				data = excluded.data, sha256 = excluded.sha256, size = excluded.size`,
-			update.ID, update.Photo.ContentType, update.Photo.Data, update.Photo.SHA256, update.Photo.Size,
+				data = excluded.data, sha256 = excluded.sha256, size = excluded.size,
+				width = excluded.width, height = excluded.height,
+				display_content_type = excluded.display_content_type, display_data = excluded.display_data,
+				display_sha256 = excluded.display_sha256, display_size = excluded.display_size,
+				display_width = excluded.display_width, display_height = excluded.display_height,
+				thumb_content_type = excluded.thumb_content_type, thumb_data = excluded.thumb_data,
+				thumb_sha256 = excluded.thumb_sha256, thumb_size = excluded.thumb_size,
+				thumb_width = excluded.thumb_width, thumb_height = excluded.thumb_height`,
+			photoInsertArgs(update.ID, update.Photo)...,
 		); err != nil {
 			_ = tx.Rollback()
 			return Entry{}, fmt.Errorf("replace entry photo: %w", err)
@@ -834,6 +1087,13 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 			_ = tx.Rollback()
 			return Entry{}, fmt.Errorf("remove entry photo: %w", err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO entries_fts(rowid, word, meaning) VALUES (?, ?, ?)`,
+		update.ID, update.Word, update.Meaning,
+	); err != nil {
+		_ = tx.Rollback()
+		return Entry{}, fmt.Errorf("update search index: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Entry{}, fmt.Errorf("commit entry update: %w", err)
@@ -859,6 +1119,10 @@ func (s *Store) DeleteEntries(ctx context.Context, ids []int64) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin entry delete: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entries_fts WHERE rowid IN (`+placeholders+`)`, clean...); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("delete search index rows: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE id IN (`+placeholders+`)`, clean...)
 	if err != nil {

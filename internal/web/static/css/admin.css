@@ -275,6 +275,18 @@
   border: 1px solid var(--rule-strong);
 }
 
+.admin-photo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.admin-photo-original {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .field-date {
   max-width: 16rem;
 }

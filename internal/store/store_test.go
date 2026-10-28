@@ -49,6 +49,9 @@ func insertRaw(t *testing.T, st *Store, word, meaning, createdAt string) int64 {
 	if err != nil {
 		t.Fatalf("insert raw entry: %v", err)
 	}
+	if _, err := st.db.Exec(`INSERT INTO entries_fts (rowid, word, meaning) VALUES (?, ?, ?)`, id, word, meaning); err != nil {
+		t.Fatalf("index raw entry: %v", err)
+	}
 	return id
 }
 
@@ -95,6 +98,94 @@ func TestSeedSnapshotImported(t *testing.T) {
 	}
 	if page.Total == 0 {
 		t.Errorf("search for known seed correction returned no results")
+	}
+}
+
+func TestSearchFiltersYearsAndIndexUpdates(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	typoID := insertRaw(t, st, "feutenreus", "feature", "2020-04-01T00:00:00Z")
+	otherID := insertRaw(t, st, "boeke", "books", "2021-04-01T00:00:00Z")
+	photo, err := NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	photoEntry, err := st.CreateEntry(ctx, "foto", "", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry photo: %v", err)
+	}
+
+	page, err := st.ListEntries(ctx, ListParams{Query: "euten"})
+	if err != nil {
+		t.Fatalf("ListEntries partial search: %v", err)
+	}
+	if page.Total != 1 || page.Entries[0].ID != typoID {
+		t.Fatalf("partial search = %+v, want feutenreus", page)
+	}
+
+	page, err = st.ListEntries(ctx, ListParams{Year: 2020})
+	if err != nil {
+		t.Fatalf("ListEntries year: %v", err)
+	}
+	if page.Total != 1 || page.Entries[0].ID != typoID {
+		t.Fatalf("year filter = %+v, want 2020 only", page)
+	}
+
+	hasPhoto := true
+	page, err = st.ListEntries(ctx, ListParams{HasPhoto: &hasPhoto})
+	if err != nil {
+		t.Fatalf("ListEntries photo: %v", err)
+	}
+	if page.Total != 1 || page.Entries[0].ID != photoEntry.ID {
+		t.Fatalf("photo filter = %+v, want photo entry", page)
+	}
+
+	noPhoto := false
+	page, err = st.ListEntries(ctx, ListParams{HasPhoto: &noPhoto})
+	if err != nil {
+		t.Fatalf("ListEntries no photo: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("no-photo filter total = %d, want 2", page.Total)
+	}
+
+	years, err := st.EntryYears(ctx)
+	if err != nil {
+		t.Fatalf("EntryYears: %v", err)
+	}
+	if len(years) < 3 || years[len(years)-1] != 2020 {
+		t.Fatalf("years = %v, want 2020 included", years)
+	}
+
+	if _, err := st.UpdateEntry(ctx, EntryUpdate{ID: typoID, Word: "nieuw", Meaning: "new"}); err != nil {
+		t.Fatalf("UpdateEntry: %v", err)
+	}
+	page, err = st.ListEntries(ctx, ListParams{Query: "euten"})
+	if err != nil {
+		t.Fatalf("ListEntries old term: %v", err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("old search term still matches after update: %+v", page)
+	}
+	page, err = st.ListEntries(ctx, ListParams{Query: "nieuw"})
+	if err != nil {
+		t.Fatalf("ListEntries new term: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("new search term does not match after update: %+v", page)
+	}
+
+	if _, err := st.DeleteEntries(ctx, []int64{typoID, otherID}); err != nil {
+		t.Fatalf("DeleteEntries: %v", err)
+	}
+	page, err = st.ListEntries(ctx, ListParams{Query: "nieuw"})
+	if err != nil {
+		t.Fatalf("ListEntries after delete: %v", err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("search still matches deleted entry: %+v", page)
 	}
 }
 

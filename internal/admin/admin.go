@@ -107,6 +107,7 @@ func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.C
 func (a *Admin) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin", a.requireAuth(a.handleIndex))
 	mux.HandleFunc("GET /admin/entries", a.requireAuth(a.handleEntries))
+	mux.HandleFunc("GET /admin/entries/{id}/photo/original", a.requireAuth(a.handleOriginalPhoto))
 	mux.HandleFunc("GET /admin/entries/{id}/edit", a.requireAuth(a.handleEdit))
 	mux.HandleFunc("POST /admin/entries/{id}", a.withCSRF(maxAdminPhotoBody, a.handleUpdate))
 	mux.HandleFunc("POST /admin/entries/delete", a.withCSRF(maxAdminFormBytes, a.handleDelete))
