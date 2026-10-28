@@ -1,3 +1,15 @@
+# [1.3.0](https://github.com/martynvdijke/vandyke/compare/v1.2.0...v1.3.0) (2026-10-28)
+
+
+### Bug Fixes
+
+* exclude Python bytecode from TRMNL sources ([b918fac](https://github.com/martynvdijke/vandyke/commit/b918fac0c232c7c3d215e3cbad47de8b09f3f3f9))
+
+
+### Features
+
+* package TRMNL plugins in releases ([9cbe3f5](https://github.com/martynvdijke/vandyke/commit/9cbe3f5a134385f3c0b70b44f05ab08de1fee0a5))
+
 # [1.2.0](https://github.com/martynvdijke/vandyke/compare/v1.1.0...v1.2.0) (2026-10-27)
 
 
