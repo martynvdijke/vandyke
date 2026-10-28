@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/martynvdijke/vandyke/compare/v1.3.0...v1.4.0) (2026-10-28)
+
+
+### Features
+
+* add photo derivatives, FTS search and permalinks ([a78bb8a](https://github.com/martynvdijke/vandyke/commit/a78bb8afe1be8e8160ef4d6245bd333316cdccec))
+
 # [1.3.0](https://github.com/martynvdijke/vandyke/compare/v1.2.0...v1.3.0) (2026-10-28)
 
 
