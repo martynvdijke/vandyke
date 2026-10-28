@@ -1,0 +1,13 @@
+<div class="layout layout--col layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item"><div class="content"><div class="value value--large">{{ total }}</div><div class="label">entries · {{ unique }} unique</div></div></div>
+    <div class="hr"></div>
+    {% for e in entries limit:2 %}
+      <div class="item"><div class="content"><div class="value value--small">{% if e.word %}{{ e.word }}{% else %}photo{% endif %}</div><div class="label label--small">→ {% if e.meaning %}{{ e.meaning }}{% else %}photo{% endif %}</div></div></div>
+    {% endfor %}
+    {% if has_photo %}<div class="item"><img class="image image-cover image-dither rounded" src="{{ photo.photo_url }}" alt="Photo of a misspelling" /></div>{% endif %}
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span></div>

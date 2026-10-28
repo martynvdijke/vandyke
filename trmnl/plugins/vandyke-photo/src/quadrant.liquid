@@ -1,0 +1,12 @@
+<div class="layout layout--row gap--small">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    {% if has_photo %}
+      <div class="item"><img class="image image-cover image-dither rounded" src="{{ photo_url }}" alt="Photo of a misspelling" /></div>
+      <div class="item"><div class="content"><div class="value value--small">{% if word %}{{ word }}{% else %}photo entry{% endif %}</div><div class="label label--small">→ {% if meaning %}{{ meaning }}{% else %}photo{% endif %}</div><div class="label label--small">{{ date }}</div></div></div>
+    {% else %}
+      <div class="item"><div class="content"><div class="value value--small">{{ message }}</div></div></div>
+    {% endif %}
+  {% endif %}
+</div>

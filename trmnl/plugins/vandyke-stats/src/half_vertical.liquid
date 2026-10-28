@@ -1,0 +1,10 @@
+<div class="layout layout--col layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item"><div class="content"><div class="value value--large">{{ total }}</div><div class="label">entries</div></div></div>
+    <div class="hr"></div>
+    <div class="item"><div class="content"><div class="value value--small">{{ unique }} unique · {{ last30 }} in 30d</div><div class="label label--small">{{ span_years }} years · last {{ last_date }}</div></div></div>
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span></div>

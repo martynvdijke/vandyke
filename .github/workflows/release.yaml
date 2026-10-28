@@ -22,8 +22,14 @@ jobs:
       actions: read
       checks: read
 
+  trmnl:
+    uses: ./.github/workflows/trmnl.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+
   release:
-    needs: ci
+    needs: [ci, trmnl]
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     name: Release
     runs-on: ubuntu-latest

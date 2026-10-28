@@ -15,7 +15,7 @@ plugins:
   - [
       "@semantic-release/exec",
       {
-        prepareCmd: "sed -i 's/var Version = \".*\"/var Version = \"${nextRelease.version}\"/' cmd/vandyke/main.go"
+        prepareCmd: "sed -i 's/var Version = \".*\"/var Version = \"${nextRelease.version}\"/' cmd/vandyke/main.go && python3 scripts/package-trmnl.py ${nextRelease.version}"
       }
     ]
   - [
@@ -25,7 +25,12 @@ plugins:
         assets: ["CHANGELOG.md", "cmd/vandyke/main.go"]
       }
     ]
-  - "@semantic-release/github"
+  - [
+      "@semantic-release/github",
+      {
+        "assets": [{ "path": "dist/trmnl/*.zip" }]
+      }
+    ]
 
 branches:
   - main

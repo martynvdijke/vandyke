@@ -1,0 +1,34 @@
+{% comment %}vanDyke dashboard{% endcomment %}
+<div class="layout layout--col layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--base">{{ error }}</div></div></div>
+  {% else %}
+    <div class="grid grid--cols-4 gap--small">
+      <div class="item"><div class="content"><div class="value value--base">{{ total }}</div><div class="label label--small">entries</div></div></div>
+      <div class="item"><div class="content"><div class="value value--base">{{ unique }}</div><div class="label label--small">unique</div></div></div>
+      <div class="item"><div class="content"><div class="value value--base">{{ last30 }}</div><div class="label label--small">30 days</div></div></div>
+      <div class="item"><div class="content"><div class="value value--base">{{ span_years }}</div><div class="label label--small">years</div></div></div>
+    </div>
+    <div class="hr"></div>
+    <div class="grid grid--cols-2 gap">
+      <div class="item">
+        <div class="content">
+          <div class="label label--small">Latest slips</div>
+          <div class="hr"></div>
+          {% for e in entries %}
+            <div class="flex flex--row flex--between">
+              <span class="value value--small">{% if e.word %}{{ e.word }}{% else %}photo{% endif %}</span>
+              <span class="label label--small">→ {% if e.meaning %}{{ e.meaning }}{% else %}photo{% endif %}</span>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% if has_photo %}
+        <div class="item"><img class="image image-cover image-dither rounded" src="{{ photo.photo_url }}" alt="Photo of a misspelling" /></div>
+      {% else %}
+        <div class="item"><div class="content"><div class="label label--small">No photo entries yet.</div></div></div>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span><span class="instance">dashboard</span></div>

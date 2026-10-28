@@ -8,3 +8,4 @@ self-hosted Umami analytics.
 - [Repository README](https://github.com/martynvdijke/vandyke#readme)
 
 - [Admin and OIDC design](superpowers/specs/2026-10-27-admin-oidc-umami-design.md)
+- [TRMNL plugins](https://github.com/martynvdijke/vandyke/tree/main/trmnl)

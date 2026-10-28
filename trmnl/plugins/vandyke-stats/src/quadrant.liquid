@@ -1,0 +1,8 @@
+<div class="layout layout--col gap--small">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item"><div class="content"><div class="value value--large">{{ total }}</div><div class="label label--small">entries</div></div></div>
+    <div class="item"><div class="content"><div class="value value--small">{{ unique }} unique · {{ last30 }} / 30d</div></div></div>
+  {% endif %}
+</div>

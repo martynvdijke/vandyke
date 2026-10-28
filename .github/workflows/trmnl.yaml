@@ -1,0 +1,99 @@
+name: TRMNL plugins
+
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - "trmnl/**"
+      - "scripts/package-trmnl.py"
+      - ".github/workflows/trmnl.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and test plugins
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Test transforms
+        run: python3 trmnl/tests/test_vandyke_transform.py
+
+      - name: Verify release packaging
+        run: |
+          python3 scripts/package-trmnl.py 0.0.0-ci
+          count=$(find dist/trmnl -name '*.zip' -size +0c | wc -l)
+          test "$count" -eq 5
+          find dist/trmnl -name '*.zip' -printf '%f\n' | sort
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "4.0"
+
+      - name: Install trmnlp
+        run: gem install trmnl_preview -v 0.32.3
+
+      - name: Lint plugins
+        run: |
+          for d in trmnl/plugins/*/; do
+            echo "Linting $d"
+            trmnlp lint --dir "$d"
+          done
+
+  push:
+    name: Push plugins
+    needs: lint
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "4.0"
+
+      - name: Install trmnlp
+        run: gem install trmnl_preview -v 0.32.3
+
+      - name: Require pinned plugin IDs
+        run: |
+          for d in trmnl/plugins/*/; do
+            if ! grep -Eq '^id: [0-9]+$' "$d/src/settings.yml"; then
+              echo "::error::$d/src/settings.yml has no pinned TRMNL plugin ID."
+              exit 1
+            fi
+          done
+
+      - name: Check TRMNL token
+        id: token
+        env:
+          TRMNL_API_KEY: ${{ secrets.TRML_TOKEN }}
+        run: |
+          if [ -z "$TRMNL_API_KEY" ]; then
+            echo "::warning::TRML_TOKEN is not configured; skipping plugin push."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push plugins
+        if: steps.token.outputs.available == 'true'
+        env:
+          TRMNL_API_KEY: ${{ secrets.TRML_TOKEN }}
+        run: |
+          for d in trmnl/plugins/*/; do
+            echo "Pushing $d"
+            trmnlp push --force --dir "$d"
+          done

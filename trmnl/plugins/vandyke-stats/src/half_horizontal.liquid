@@ -1,0 +1,11 @@
+<div class="layout layout--row layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item"><div class="content"><div class="label label--small">vanDyke</div><div class="value value--large">{{ total }}</div><div class="label label--small">entries</div></div></div>
+    <div class="item"><div class="content"><div class="value value--large">{{ unique }}</div><div class="label label--small">unique</div></div></div>
+    <div class="item"><div class="content"><div class="value value--large">{{ last30 }}</div><div class="label label--small">last 30d</div></div></div>
+    <div class="item"><div class="content"><div class="value value--large">{{ span_years }}</div><div class="label label--small">years</div></div></div>
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span><span class="instance">stats</span></div>

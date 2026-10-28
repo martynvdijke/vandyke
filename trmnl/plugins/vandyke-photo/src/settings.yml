@@ -1,0 +1,49 @@
+strategy: polling
+no_screen_padding: 'no'
+dark_mode: 'no'
+static_data: ''
+polling_verb: get
+framework_version: latest
+serverless_language: python
+polling_url: "{{url}}/api/v1/entries?per_page=25&sort=created_at&order=desc"
+polling_headers: Accept=application/json
+polling_body: ''
+id: 521910
+oauth_enabled: 'false'
+oauth_pkce_enabled: 'no'
+oauth_authorize_url: ''
+oauth_token_url: ''
+oauth_scopes: ''
+oauth_scope_separator: ''
+oauth_refresh_url: ''
+oauth_auth_params: ''
+oauth_token_headers: ''
+oauth_token_site: ''
+oauth_token_params: ''
+oauth_token_request_auth_method: ''
+oauth_body_format: ''
+oauth_token_response_metadata: ''
+oauth_authorization_method: ''
+oauth_refresh_params: ''
+oauth_token_field_name: ''
+oauth_expiry_field_name: ''
+oauth_expiry_strategy: ''
+oauth_fixed_expiry_ms: ''
+custom_fields:
+- keyname: url
+  name: Address of vanDyke
+  field_type: url
+  description: The base URL of your vanDyke ledger
+  placeholder: https://vandyke.example.com
+  help_text: Include the protocol, without a trailing slash
+- keyname: bio
+  name: About This Plugin
+  category: entertainment
+  field_type: author_bio
+  description: I run a self-hosted vanDyke misspelling ledger and like seeing its latest slips on my TRMNL.
+  github_url: https://github.com/martynvdijke/vandyke
+  learn_more_url: https://github.com/martynvdijke/vandyke
+  email_address: martyn@vandijke.xyz
+name: VanDyke Photo Slip
+description: Newest photo misspelling
+refresh_interval: 360

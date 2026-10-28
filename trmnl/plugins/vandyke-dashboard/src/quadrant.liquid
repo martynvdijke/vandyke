@@ -1,0 +1,8 @@
+<div class="layout layout--col gap--small">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item"><div class="content"><div class="value value--large">{{ total }}</div><div class="label label--small">entries · {{ unique }} unique</div></div></div>
+    <div class="item"><div class="content"><div class="label label--small">{% if entries[0].word %}{{ entries[0].word }}{% else %}photo{% endif %} → {% if entries[0].meaning %}{{ entries[0].meaning }}{% else %}photo{% endif %}</div></div></div>
+  {% endif %}
+</div>

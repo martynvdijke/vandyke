@@ -1,0 +1,21 @@
+{% comment %}vanDyke ledger statistics{% endcomment %}
+<div class="layout layout--col layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--base">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item">
+      <div class="content">
+        <div class="label label--small">vanDyke · ledger</div>
+        <div class="value value--xlarge">{{ total }}</div>
+        <div class="label">entries in the ledger</div>
+      </div>
+    </div>
+    <div class="grid grid--cols-3 gap--small">
+      <div class="item"><div class="content"><div class="value value--base">{{ unique }}</div><div class="label label--small">unique misspellings</div></div></div>
+      <div class="item"><div class="content"><div class="value value--base">{{ last30 }}</div><div class="label label--small">added in 30 days</div></div></div>
+      <div class="item"><div class="content"><div class="value value--base">{{ span_years }}</div><div class="label label--small">years of slips</div></div></div>
+    </div>
+    <div class="item"><div class="content"><div class="label label--small">Last addition</div><div class="value value--small">{{ last_date }}</div></div></div>
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span><span class="instance">stats</span></div>

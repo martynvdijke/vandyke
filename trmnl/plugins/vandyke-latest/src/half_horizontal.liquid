@@ -1,0 +1,10 @@
+<div class="layout layout--col gap--small">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    {% for e in entries limit:2 %}
+      <div class="item"><div class="content"><span class="value value--small">{% if e.word %}{{ e.word }}{% else %}photo{% endif %}</span> <span class="label">→ {% if e.meaning %}{{ e.meaning }}{% else %}photo{% endif %}</span></div></div>
+    {% endfor %}
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke · latest</span><span class="instance">{{ total }} entries</span></div>

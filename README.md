@@ -31,6 +31,8 @@ services required.
   settings page or environment variables. Page views and custom events
   (`search`, `entry-added`, `theme-toggle`) are sent only when enabled; the CSP
   is adjusted at runtime.
+- **Four TRMNL e-ink plugins** — ledger stats, latest slips, the newest photo
+  entry and a combined dashboard, packaged as versioned release downloads.
 
 ## Quickstart
 
@@ -64,6 +66,9 @@ make test         # full test suite
 make vet          # go vet
 make docker       # build the image
 make compose-up   # start with docker compose
+make trmnl-test   # run the TRMNL transform tests
+make trmnl-lint   # lint the TRMNL plugins (requires trmnlp)
+make trmnl-package # build versioned TRMNL plugin zips into dist/
 ```
 
 ## Configuration
@@ -172,6 +177,23 @@ change. Without a URL and website ID no script is loaded and no request leaves
 the page. Events sent: `search` (debounced query, ≥ 2 characters),
 `entry-added`, `theme-toggle`.
 
+## TRMNL plugins
+
+The ledger has four companion e-ink plugins in [`trmnl/`](trmnl/README.md):
+
+| Plugin | TRMNL ID | Shows |
+| --- | ---: | --- |
+| `vandyke-stats` | 521911 | Ledger totals, unique misspellings, last 30 days and the last slip |
+| `vandyke-latest` | 521909 | The three newest misspellings |
+| `vandyke-photo` | 521910 | The newest entry with a photo |
+| `vandyke-dashboard` | 521908 | Stats, latest entries and the newest photo |
+
+Each plugin takes one setting: the base URL of the ledger. The plugin IDs are
+pinned in `src/settings.yml`, so `trmnlp push` updates the existing TRMNL
+plugins. Every release attaches per-plugin zips and a combined archive to the
+GitHub release; `make trmnl-package` builds the same archives locally under
+`dist/trmnl/`.
+
 ## Data provenance
 
 The seed dataset in `internal/store/seed_entries.json` is a snapshot of
@@ -195,7 +217,8 @@ internal/ratelimit/    per-IP token bucket
 internal/httpx/        shared HTTP helpers (client IP, JSON envelopes, logging)
 internal/httpapi/      REST API under /api/v1
 internal/web/          public HTML interface: templates, CSS, JS, fonts
-scripts/               one-off seed scraper and font fetcher
+trmnl/                 four TRMNL plugins, transforms and tests
+scripts/               seed scraper, font fetcher, TRMNL packaging
 ```
 
 ## Security notes
@@ -223,15 +246,24 @@ rate limiter, the JSON API, the admin flows (setup, login, CSRF, edit, delete,
 Umami settings), and the public web layer (partial rendering, HTMX flows, no-JS
 flows, rate-limit errors, Umami injection, cache headers).
 
+The TRMNL transforms have their own stdlib-only Python tests:
+
+```sh
+make trmnl-test
+```
+
 ## CI, releases and updates
 
 - **CI** (`.github/workflows/ci.yaml`) — builds, vets, lints
   (`golangci-lint`) and tests every push and pull request, and uploads a
   coverage report.
+- **TRMNL plugins** (`trmnl.yaml`) — tests the transforms, lints all four
+  plugins, and pushes them to TRMNL on `main` when `TRML_TOKEN` is configured.
 - **Releases** (`release.yaml`) — [semantic-release](https://semantic-release.gitbook.io/)
-  turns Conventional Commits into tags, GitHub releases and a changelog, then
-  publishes the Docker image to `martynvandijke/vandyke` on Docker Hub and
-  `ghcr.io/martynvdijke/vandyke` on GHCR.
+  turns Conventional Commits into tags, GitHub releases and a changelog,
+  attaches the versioned TRMNL plugin zips, then publishes the Docker image to
+  `martynvandijke/vandyke` on Docker Hub and `ghcr.io/martynvdijke/vandyke` on
+  GHCR.
 - **Renovate** (`renovate.json`, `renovate.yml`) — scheduled dependency
   updates with automerge.
 - **Docs** (`docs.yml`) — builds the `docs/` folder with Zensical and deploys

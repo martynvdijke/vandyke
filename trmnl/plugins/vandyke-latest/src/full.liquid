@@ -1,0 +1,21 @@
+{% comment %}Latest vanDyke entries{% endcomment %}
+<div class="layout layout--col layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--base">{{ error }}</div></div></div>
+  {% else %}
+    <div class="item"><div class="content"><div class="label label--small">vanDyke · latest slips</div><div class="label label--small">{{ total }} entries in the ledger</div></div></div>
+    {% for e in entries %}
+      <div class="item">
+        <div class="content">
+          <div class="flex flex--row flex--between">
+            <span class="value value--small">{% if e.word %}{{ e.word }}{% else %}photo entry{% endif %}</span>
+            <span class="label label--small">{{ e.date }}</span>
+          </div>
+          <div class="label">→ {% if e.meaning %}{{ e.meaning }}{% else %}photo entry{% endif %}</div>
+        </div>
+      </div>
+      {% unless forloop.last %}<div class="hr"></div>{% endunless %}
+    {% endfor %}
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span><span class="instance">latest</span></div>
