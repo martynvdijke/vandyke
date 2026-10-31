@@ -1,3 +1,10 @@
+## [1.4.3](https://github.com/martynvdijke/vandyke/compare/v1.4.2...v1.4.3) (2026-10-31)
+
+
+### Bug Fixes
+
+* deduplicate ledger entries and reject new duplicates ([a60cd21](https://github.com/martynvdijke/vandyke/commit/a60cd214110fd0300ad565ef6e55bb820aa31cc4))
+
 ## [1.4.2](https://github.com/martynvdijke/vandyke/compare/v1.4.1...v1.4.2) (2026-10-30)
 
 ## [1.4.1](https://github.com/martynvdijke/vandyke/compare/v1.4.0...v1.4.1) (2026-10-28)
