@@ -13,9 +13,12 @@ services required.
 - **The Corrections Ledger** — an editorial paper-and-ink interface built with
   Go templates, HTMX and a small hand-written stylesheet. Light and dark theme,
   animated rows, keyboard- and screen-reader-friendly.
-- **All original data, seeded** — the 100 entries from the original site
+- **All original data, seeded** — the 78 unique entries from the original site
   (October 2017 → March 2026) are embedded in the binary and imported into
-  SQLite on first start.
+  SQLite on first start. Duplicate submissions are collapsed to their earliest
+  occurrence.
+- **No accidental duplicates** — adding an entry whose misspelling and
+  correction already exist is rejected case-insensitively.
 - **JSON REST API** — list, search, filter, sort, paginate and add entries;
   stats and a health endpoint. See [API](#api).
 - **Add entries from the web or the API** — text entries or photos of a
@@ -115,7 +118,7 @@ stable envelope:
 | --- | --- |
 | `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`). |
 | `GET /api/v1/entries/{id}` | Single entry. `404` when missing. |
-| `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning` and an optional `photo` file. `201` with `Location`; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
+| `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning` and an optional `photo` file. `201` with `Location`; `409` when the entry already exists; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
 | `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo. The original upload is available only to admins. |
 | `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`. |
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
@@ -220,8 +223,9 @@ GitHub release; `make trmnl-package` builds the same archives locally under
 
 The seed dataset in `internal/store/seed_entries.json` is a snapshot of
 [vandyke.thor.edu](https://vandyke.thor.edu/) taken on **2026-10-06**:
-**100 entries**, duplicates preserved, timestamps as recorded on the original
-site (2017-10-02 → 2026-03-13). It was extracted with
+**78 entries**, deduplicated by misspelling and correction (case-insensitive,
+earliest timestamp kept), with timestamps as recorded on the original site
+(2017-10-02 → 2026-03-13). It was extracted with
 `scripts/scrape_seed.py`. The seed is imported exactly once, when the `entries`
 table is empty — the original page remains the canonical source if the two ever
 diverge.

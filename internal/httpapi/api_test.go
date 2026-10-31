@@ -87,8 +87,8 @@ func TestListEntries(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if page.Total != 100 || page.Pages != 20 || len(page.Entries) != 5 {
-		t.Fatalf("page metadata = total %d pages %d items %d, want 100/20/5", page.Total, page.Pages, len(page.Entries))
+	if page.Total != 78 || page.Pages != 16 || len(page.Entries) != 5 {
+		t.Fatalf("page metadata = total %d pages %d items %d, want 78/16/5", page.Total, page.Pages, len(page.Entries))
 	}
 	for i := 1; i < len(page.Entries); i++ {
 		if page.Entries[i].CreatedAt.After(page.Entries[i-1].CreatedAt) {
@@ -170,8 +170,34 @@ func TestCreateEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountEntries: %v", err)
 	}
-	if count != 101 {
-		t.Fatalf("count = %d, want 101", count)
+	if count != 79 {
+		t.Fatalf("count = %d, want 79", count)
+	}
+}
+
+func TestCreateEntryDuplicate(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	payload := `{"word":"Dubbel","meaning":"dubbel"}`
+	resp, err := http.Post(srv.URL+"/api/v1/entries", "application/json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first status = %d, want 201", resp.StatusCode)
+	}
+
+	resp, err = http.Post(srv.URL+"/api/v1/entries", "application/json", strings.NewReader(`{"word":"dubbel","meaning":"DUBBEL"}`))
+	if err != nil {
+		t.Fatalf("POST duplicate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate status = %d, want 409", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body.Error.Code != "duplicate_entry" {
+		t.Fatalf("code = %q, want duplicate_entry", body.Error.Code)
 	}
 }
 
@@ -383,8 +409,8 @@ func TestStats(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if stats.Total != 100 || stats.UniqueWords == 0 {
-		t.Fatalf("stats = %+v, want 100 seeded entries", stats)
+	if stats.Total != 78 || stats.UniqueWords == 0 {
+		t.Fatalf("stats = %+v, want 78 seeded entries", stats)
 	}
 	if stats.FirstEntryAt == nil || stats.LastEntryAt == nil {
 		t.Fatalf("stats timestamps missing: %+v", stats)

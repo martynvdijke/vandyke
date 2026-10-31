@@ -147,6 +147,10 @@ func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
 func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, meaning string, photo *store.Photo) {
 	entry, err := a.store.CreateEntry(r.Context(), word, meaning, photo)
 	if err != nil {
+		if errors.Is(err, store.ErrDuplicate) {
+			httpx.WriteError(rw, http.StatusConflict, "duplicate_entry", "that entry is already in the ledger")
+			return
+		}
 		a.logger.Error("create entry", "error", err)
 		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not create entry")
 		return

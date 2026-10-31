@@ -190,16 +190,6 @@
   "created_at": "2017-11-13T15:18:55Z"
  },
  {
-  "word": "Pipaschop",
-  "meaning": "Pipashop",
-  "created_at": "2017-11-13T15:19:32Z"
- },
- {
-  "word": "Pipaschop",
-  "meaning": "Pipashop",
-  "created_at": "2017-11-13T15:19:36Z"
- },
- {
   "word": "Rooijmakers",
   "meaning": "Rooijackers",
   "created_at": "2017-11-13T19:47:53Z"
@@ -210,19 +200,9 @@
   "created_at": "2017-11-13T21:05:57Z"
  },
  {
-  "word": "onding",
-  "meaning": "onzin",
-  "created_at": "2017-11-13T21:08:02Z"
- },
- {
   "word": "tseslan",
   "meaning": "teslan",
   "created_at": "2017-12-06T18:16:50Z"
- },
- {
-  "word": "tseslan",
-  "meaning": "teslan",
-  "created_at": "2017-12-06T18:18:11Z"
  },
  {
   "word": "Dennus",
@@ -230,29 +210,14 @@
   "created_at": "2017-12-20T16:53:52Z"
  },
  {
-  "word": "Dennus",
-  "meaning": "Dennis",
-  "created_at": "2017-12-20T16:54:01Z"
- },
- {
   "word": "beetje scharig",
   "meaning": "beetje karig",
   "created_at": "2017-12-20T18:05:08Z"
  },
  {
-  "word": "beetje scharig",
-  "meaning": "beetje karig",
-  "created_at": "2017-12-20T18:05:11Z"
- },
- {
   "word": "hamesome",
   "meaning": "handsome",
   "created_at": "2017-12-20T18:33:20Z"
- },
- {
-  "word": "hamesome",
-  "meaning": "handsome",
-  "created_at": "2017-12-20T18:33:33Z"
  },
  {
   "word": "Bert",
@@ -273,11 +238,6 @@
   "word": "niet waar dennis",
   "meaning": "df",
   "created_at": "2018-01-08T18:39:03Z"
- },
- {
-  "word": "niet waar dennis",
-  "meaning": "df",
-  "created_at": "2018-01-08T18:39:15Z"
  },
  {
   "word": "Feute",
@@ -345,11 +305,6 @@
   "created_at": "2018-11-13T10:42:40Z"
  },
  {
-  "word": "Matthijs",
-  "meaning": "Mathijs",
-  "created_at": "2018-11-13T10:42:46Z"
- },
- {
   "word": "Zogiezo",
   "meaning": "Sowieso",
   "created_at": "2018-11-26T12:21:32Z"
@@ -385,24 +340,9 @@
   "created_at": "2019-08-09T19:07:08Z"
  },
  {
-  "word": "gudgen",
-  "meaning": "Oordelen",
-  "created_at": "2019-08-09T19:07:12Z"
- },
- {
-  "word": "gudgen",
-  "meaning": "Oordelen",
-  "created_at": "2019-08-10T19:11:42Z"
- },
- {
   "word": "Gereëngeveurd",
   "meaning": "Ge-reverse-engineered",
   "created_at": "2019-12-16T19:31:24Z"
- },
- {
-  "word": "Gereëngeveurd",
-  "meaning": "Ge-reverse-engineered",
-  "created_at": "2019-12-16T19:32:03Z"
  },
  {
   "word": "Geschuddeld",
@@ -415,34 +355,9 @@
   "created_at": "2021-09-20T16:51:14Z"
  },
  {
-  "word": "deneetief",
-  "meaning": "definitief",
-  "created_at": "2021-09-20T16:51:23Z"
- },
- {
-  "word": "deneetief",
-  "meaning": "definitief",
-  "created_at": "2021-09-20T17:13:58Z"
- },
- {
   "word": "spilts",
   "meaning": "splits",
   "created_at": "2022-02-16T20:09:59Z"
- },
- {
-  "word": "spilts",
-  "meaning": "splits",
-  "created_at": "2022-02-16T20:15:44Z"
- },
- {
-  "word": "spilts",
-  "meaning": "splits",
-  "created_at": "2022-02-16T20:15:46Z"
- },
- {
-  "word": "spilts",
-  "meaning": "splits",
-  "created_at": "2022-02-16T20:15:47Z"
  },
  {
   "word": "Feutenreus",
@@ -450,19 +365,9 @@
   "created_at": "2022-03-04T20:37:18Z"
  },
  {
-  "word": "Feutenreus",
-  "meaning": "Feature",
-  "created_at": "2022-03-04T20:37:58Z"
- },
- {
   "word": "amerto",
   "meaning": "Amaretto",
   "created_at": "2022-04-15T15:32:32Z"
- },
- {
-  "word": "amerto",
-  "meaning": "Amaretto",
-  "created_at": "2022-04-15T15:33:09Z"
  },
  {
   "word": "Geraldine",
@@ -480,23 +385,8 @@
   "created_at": "2026-01-02T21:48:23Z"
  },
  {
-  "word": "gloeilamp",
-  "meaning": "olielamp",
-  "created_at": "2026-01-02T21:48:31Z"
- },
- {
   "word": "didactisch indrukken",
   "meaning": "Haptisch indrukken",
   "created_at": "2026-03-13T22:07:13Z"
- },
- {
-  "word": "didactisch indrukken",
-  "meaning": "Haptisch indrukken",
-  "created_at": "2026-03-13T22:07:16Z"
- },
- {
-  "word": "didactisch indrukken",
-  "meaning": "Haptisch indrukken",
-  "created_at": "2026-03-13T22:07:21Z"
  }
 ]

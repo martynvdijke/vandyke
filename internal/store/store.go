@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // CGO-free SQLite driver
+	sqlite "modernc.org/sqlite" // CGO-free SQLite driver
 )
 
 //go:embed migrations/*.sql
@@ -30,6 +30,10 @@ var seedFS embed.FS
 // ErrNotFound is returned when an entry does not exist.
 var ErrNotFound = errors.New("entry not found")
 
+// ErrDuplicate is returned when an entry with the same misspelling and
+// correction already exists, compared case-insensitively.
+var ErrDuplicate = errors.New("entry already exists")
+
 // ErrAdminExists is returned when first-run setup is attempted after an admin
 // account has already been created.
 var ErrAdminExists = errors.New("an admin account already exists")
@@ -39,6 +43,15 @@ var ErrAdminNotFound = errors.New("admin not found")
 
 // ErrSessionNotFound is returned when a session is missing or expired.
 var ErrSessionNotFound = errors.New("session not found")
+
+// sqliteConstraintUnique is SQLITE_CONSTRAINT_UNIQUE.
+const sqliteConstraintUnique = 2067
+
+// isUniqueViolation reports whether err is a SQLite unique-constraint error.
+func isUniqueViolation(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqliteConstraintUnique
+}
 
 const (
 	// DefaultPerPage is the page size used when a request does not specify one.
@@ -680,6 +693,9 @@ func (s *Store) CreateEntry(ctx context.Context, word, meaning string, photo *Ph
 	res, err := tx.ExecContext(ctx, `INSERT INTO entries (word, meaning) VALUES (?, ?)`, word, meaning)
 	if err != nil {
 		_ = tx.Rollback()
+		if isUniqueViolation(err) {
+			return Entry{}, ErrDuplicate
+		}
 		return Entry{}, fmt.Errorf("insert entry: %w", err)
 	}
 	id, err := res.LastInsertId()
@@ -1059,6 +1075,9 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 		update.Word, update.Meaning, update.CreatedAt.UTC().Format(time.RFC3339), update.ID,
 	); err != nil {
 		_ = tx.Rollback()
+		if isUniqueViolation(err) {
+			return Entry{}, ErrDuplicate
+		}
 		return Entry{}, fmt.Errorf("update entry: %w", err)
 	}
 	switch {

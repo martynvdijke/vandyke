@@ -166,8 +166,8 @@ func TestIndexRendersLedgerAndStats(t *testing.T) {
 			t.Errorf("index page does not contain %q", want)
 		}
 	}
-	if !strings.Contains(body, ">100<") {
-		t.Errorf("index page does not show the seeded entry count of 100")
+	if !strings.Contains(body, ">78<") {
+		t.Errorf("index page does not show the seeded entry count of 78")
 	}
 }
 
@@ -222,7 +222,7 @@ func TestPaginationLinks(t *testing.T) {
 
 	_, _, body := fetch(t, srv, "/", nil)
 	if !strings.Contains(body, `class="pager"`) {
-		t.Fatal("pager not rendered for the seeded 100 entries")
+		t.Fatal("pager not rendered for the seeded 78 entries")
 	}
 	if !strings.Contains(body, "Next →") {
 		t.Fatal("next link missing on page one")
@@ -259,6 +259,27 @@ func TestCreateEntryHTMX(t *testing.T) {
 	_, _, search := fetch(t, srv, "/entries?q=nieuw+woord", nil)
 	if !strings.Contains(search, "nieuw woord") {
 		t.Fatal("new entry is not searchable")
+	}
+}
+
+func TestCreateEntryHTMXDuplicate(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	form := url.Values{"word": {"dubbel"}, "meaning": {"dubbel"}}
+	if status, _, _ := postForm(t, srv, form, map[string]string{"HX-Request": "true"}); status != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", status)
+	}
+
+	status, headers, body := postForm(t, srv, url.Values{"word": {"DUBBEL"}, "meaning": {"Dubbel"}},
+		map[string]string{"HX-Request": "true"})
+	if status != http.StatusOK {
+		t.Fatalf("duplicate status = %d, want 200", status)
+	}
+	if got := headers.Get("HX-Retarget"); got != "#form-error" {
+		t.Fatalf("HX-Retarget = %q, want #form-error", got)
+	}
+	if !strings.Contains(body, "already in the ledger") {
+		t.Fatalf("error body = %q, want duplicate message", body)
 	}
 }
 

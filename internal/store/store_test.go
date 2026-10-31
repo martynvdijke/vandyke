@@ -63,16 +63,16 @@ func TestSeedSnapshotImported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountEntries: %v", err)
 	}
-	if count != 100 {
-		t.Fatalf("seeded entry count = %d, want 100", count)
+	if count != 78 {
+		t.Fatalf("seeded entry count = %d, want 78", count)
 	}
 
 	stats, err := st.Stats(ctx)
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
-	if stats.Total != 100 {
-		t.Errorf("stats total = %d, want 100", stats.Total)
+	if stats.Total != 78 {
+		t.Errorf("stats total = %d, want 78", stats.Total)
 	}
 	if stats.FirstEntryAt == nil || stats.LastEntryAt == nil {
 		t.Fatalf("stats timestamps missing: %+v", stats)
@@ -80,8 +80,8 @@ func TestSeedSnapshotImported(t *testing.T) {
 	if got := stats.FirstEntryAt.Format(time.RFC3339); got != "2017-10-02T00:00:00Z" {
 		t.Errorf("first entry = %s, want 2017-10-02T00:00:00Z", got)
 	}
-	if got := stats.LastEntryAt.Format(time.RFC3339); got != "2026-03-13T22:07:21Z" {
-		t.Errorf("last entry = %s, want 2026-03-13T22:07:21Z", got)
+	if got := stats.LastEntryAt.Format(time.RFC3339); got != "2026-03-13T22:07:13Z" {
+		t.Errorf("last entry = %s, want 2026-03-13T22:07:13Z", got)
 	}
 
 	first, err := st.GetEntry(ctx, 1)
@@ -214,8 +214,8 @@ func TestSeedOnlyImportedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountEntries: %v", err)
 	}
-	if count != 101 {
-		t.Fatalf("count after reopen = %d, want 101 (no reseed)", count)
+	if count != 79 {
+		t.Fatalf("count after reopen = %d, want 79 (no reseed)", count)
 	}
 }
 
@@ -366,6 +366,35 @@ func TestCreateEntryValidationAndTrimming(t *testing.T) {
 
 	if _, err := st.GetEntry(ctx, entry.ID+1000); err != ErrNotFound {
 		t.Fatalf("GetEntry(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCreateEntryRejectsDuplicates(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	if _, err := st.CreateEntry(ctx, "Dubbel", "dubbel", nil); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	if _, err := st.CreateEntry(ctx, "  dubbel  ", "DUBBEL", nil); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate CreateEntry error = %v, want ErrDuplicate", err)
+	}
+
+	other, err := st.CreateEntry(ctx, "ander", "anders", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry other: %v", err)
+	}
+	if _, err := st.UpdateEntry(ctx, EntryUpdate{ID: other.ID, Word: "dubbel", Meaning: "DUBBEL"}); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate UpdateEntry error = %v, want ErrDuplicate", err)
+	}
+
+	count, err := st.CountEntries(ctx)
+	if err != nil {
+		t.Fatalf("CountEntries: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
 	}
 }
 

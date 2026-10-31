@@ -356,6 +356,15 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 
 	entry, err := w.store.CreateEntry(r.Context(), word, meaning, photo)
 	if err != nil {
+		if errors.Is(err, store.ErrDuplicate) {
+			const message = "That entry is already in the ledger."
+			if isHTMX {
+				w.renderFormError(rw, message)
+			} else {
+				w.renderIndexError(rw, r, http.StatusConflict, message, word, meaning)
+			}
+			return
+		}
 		w.logger.Error("create entry", "error", err)
 		http.Error(rw, "could not add entry", http.StatusInternalServerError)
 		return
