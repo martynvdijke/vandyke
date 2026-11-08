@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/martynvdijke/vandyke/compare/v1.7.0...v1.8.0) (2026-11-08)
+
+
+### Features
+
+* **mobile:** filter the ledger by person and surface the latest slips ([2fc6256](https://github.com/martynvdijke/vandyke/commit/2fc6256ecb25f96b1e84de5b87ebb666d82fd791))
+
 # [1.7.0](https://github.com/martynvdijke/vandyke/compare/v1.6.0...v1.7.0) (2026-11-08)
 
 
