@@ -456,7 +456,7 @@ func TestStaticAssetsAreCacheable(t *testing.T) {
 
 func TestPermalinkPage(t *testing.T) {
 	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
-	entry, err := st.CreateEntry(t.Context(), "perm", "link", nil)
+	entry, err := st.CreateEntry(t.Context(), "perm", "link", "", nil)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestPermalinkPhotoOpenGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(t.Context(), "foto", "photo", photo)
+	entry, err := st.CreateEntry(t.Context(), "foto", "photo", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestLedgerPermalinksAndPhotoSizes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(t.Context(), "foto", "photo", photo)
+	entry, err := st.CreateEntry(t.Context(), "foto", "photo", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -550,7 +550,7 @@ func TestLedgerFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(t.Context(), "filterfoto", "photo", photo)
+	entry, err := st.CreateEntry(t.Context(), "filterfoto", "photo", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}

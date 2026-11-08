@@ -62,6 +62,8 @@ const (
 	MaxWordLen = 200
 	// MaxMeaningLen is the maximum accepted length of a correction.
 	MaxMeaningLen = 500
+	// MaxPersonLen is the maximum accepted length of an entry's person.
+	MaxPersonLen = 100
 	// MaxPhotoBytes caps the size of an uploaded photo.
 	MaxPhotoBytes = 10 << 20
 )
@@ -72,6 +74,7 @@ type Entry struct {
 	ID        int64     `json:"id"`
 	Word      string    `json:"word"`
 	Meaning   string    `json:"meaning"`
+	Person    string    `json:"person,omitempty"`
 	PhotoURL  string    `json:"photo_url,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -155,6 +158,7 @@ type ListParams struct {
 	Query    string
 	Sort     string
 	Order    string
+	Person   string
 	Page     int
 	PerPage  int
 	HasPhoto *bool
@@ -210,6 +214,7 @@ func ValidateEntry(word, meaning string, hasPhoto bool) error {
 // NormalizeListParams clamps list parameters to supported values.
 func NormalizeListParams(p ListParams) ListParams {
 	p.Query = strings.TrimSpace(p.Query)
+	p.Person = strings.TrimSpace(p.Person)
 	if _, ok := sortColumns[p.Sort]; !ok {
 		p.Sort = "created_at"
 	}
@@ -421,7 +426,7 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 		p.Page = 1
 	}
 
-	query := `SELECT e.id, e.word, e.meaning, e.created_at,
+	query := `SELECT e.id, e.word, e.meaning, e.person, e.created_at,
 		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
 		FROM entries e` + where +
 		` ORDER BY ` + sortColumns[p.Sort] + ` ` + strings.ToUpper(p.Order) + `, id ` + strings.ToUpper(p.Order) +
@@ -478,6 +483,10 @@ func ledgerFilter(p ListParams) (string, []any) {
 			fmt.Sprintf("%04d-01-01T00:00:00Z", p.Year+1),
 		)
 	}
+	if person := strings.TrimSpace(p.Person); person != "" {
+		clauses = append(clauses, `e.person = ? COLLATE NOCASE`)
+		args = append(args, person)
+	}
 	if len(clauses) == 0 {
 		return "", args
 	}
@@ -526,6 +535,30 @@ func (s *Store) EntryYears(ctx context.Context) ([]int, error) {
 	return years, nil
 }
 
+// Persons returns the distinct non-empty people recorded on ledger entries,
+// ordered case-insensitively.
+func (s *Store) Persons(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT person FROM entries WHERE person <> '' ORDER BY person COLLATE NOCASE`)
+	if err != nil {
+		return nil, fmt.Errorf("query persons: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var persons []string
+	for rows.Next() {
+		var person string
+		if err := rows.Scan(&person); err != nil {
+			return nil, fmt.Errorf("scan person: %w", err)
+		}
+		persons = append(persons, person)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate persons: %w", err)
+	}
+	return persons, nil
+}
+
 // indexEntry keeps the trigram search index in sync with an entry.
 func indexEntry(ctx context.Context, tx *sql.Tx, id int64, word, meaning string) error {
 	if _, err := tx.ExecContext(ctx,
@@ -560,7 +593,7 @@ func (s *Store) RebuildSearchIndex(ctx context.Context) error {
 
 // GetEntry returns a single entry by ID.
 func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.created_at,
+	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.person, e.created_at,
 		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
 		FROM entries e WHERE e.id = ?`, id)
 	entry, err := scanEntry(row)
@@ -678,11 +711,23 @@ func appendVariantArgs(args []any, variant *PhotoVariant) []any {
 	return append(args, variant.ContentType, variant.Data, variant.SHA256, variant.Size, variant.Width, variant.Height)
 }
 
+// ValidatePerson checks the optional person name of an entry.
+func ValidatePerson(person string) error {
+	if len([]rune(person)) > MaxPersonLen {
+		return fmt.Errorf("person must be at most %d characters", MaxPersonLen)
+	}
+	return nil
+}
+
 // CreateEntry validates and inserts a new ledger entry, optionally with a photo.
-func (s *Store) CreateEntry(ctx context.Context, word, meaning string, photo *Photo) (Entry, error) {
+func (s *Store) CreateEntry(ctx context.Context, word, meaning, person string, photo *Photo) (Entry, error) {
 	word = strings.TrimSpace(word)
 	meaning = strings.TrimSpace(meaning)
+	person = strings.TrimSpace(person)
 	if err := ValidateEntry(word, meaning, photo != nil); err != nil {
+		return Entry{}, err
+	}
+	if err := ValidatePerson(person); err != nil {
 		return Entry{}, err
 	}
 
@@ -690,7 +735,7 @@ func (s *Store) CreateEntry(ctx context.Context, word, meaning string, photo *Ph
 	if err != nil {
 		return Entry{}, fmt.Errorf("begin entry insert: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO entries (word, meaning) VALUES (?, ?)`, word, meaning)
+	res, err := tx.ExecContext(ctx, `INSERT INTO entries (word, meaning, person) VALUES (?, ?, ?)`, word, meaning, person)
 	if err != nil {
 		_ = tx.Rollback()
 		if isUniqueViolation(err) {
@@ -777,7 +822,7 @@ func scanEntry(row rowScanner) (Entry, error) {
 		createdAt string
 		hasPhoto  bool
 	)
-	if err := row.Scan(&entry.ID, &entry.Word, &entry.Meaning, &createdAt, &hasPhoto); err != nil {
+	if err := row.Scan(&entry.ID, &entry.Word, &entry.Meaning, &entry.Person, &createdAt, &hasPhoto); err != nil {
 		return Entry{}, err
 	}
 	parsed, err := time.Parse(time.RFC3339, createdAt)
@@ -834,6 +879,7 @@ type EntryUpdate struct {
 	ID          int64
 	Word        string
 	Meaning     string
+	Person      string
 	CreatedAt   time.Time
 	Photo       *Photo
 	RemovePhoto bool
@@ -1032,8 +1078,12 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, error) {
 	update.Word = strings.TrimSpace(update.Word)
 	update.Meaning = strings.TrimSpace(update.Meaning)
+	update.Person = strings.TrimSpace(update.Person)
 	if update.Photo != nil && update.RemovePhoto {
 		return Entry{}, errors.New("choose either a new photo or remove the existing one")
+	}
+	if err := ValidatePerson(update.Person); err != nil {
+		return Entry{}, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1071,8 +1121,8 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE entries SET word = ?, meaning = ?, created_at = ? WHERE id = ?`,
-		update.Word, update.Meaning, update.CreatedAt.UTC().Format(time.RFC3339), update.ID,
+		`UPDATE entries SET word = ?, meaning = ?, person = ?, created_at = ? WHERE id = ?`,
+		update.Word, update.Meaning, update.Person, update.CreatedAt.UTC().Format(time.RFC3339), update.ID,
 	); err != nil {
 		_ = tx.Rollback()
 		if isUniqueViolation(err) {

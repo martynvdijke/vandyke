@@ -53,6 +53,7 @@ func (a *API) handleListEntries(rw http.ResponseWriter, r *http.Request) {
 		Query:    r.URL.Query().Get("q"),
 		Sort:     r.URL.Query().Get("sort"),
 		Order:    r.URL.Query().Get("order"),
+		Person:   r.URL.Query().Get("person"),
 		Page:     queryInt(r, "page", 1),
 		PerPage:  queryInt(r, "per_page", store.DefaultPerPage),
 		HasPhoto: queryOptionalBool(r, "photo"),
@@ -96,6 +97,7 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Word    string `json:"word"`
 		Meaning string `json:"meaning"`
+		Person  string `json:"person"`
 	}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&input); err != nil {
@@ -105,12 +107,17 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 
 	input.Word = strings.TrimSpace(input.Word)
 	input.Meaning = strings.TrimSpace(input.Meaning)
+	input.Person = strings.TrimSpace(input.Person)
 	if err := store.ValidateEntry(input.Word, input.Meaning, false); err != nil {
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if err := store.ValidatePerson(input.Person); err != nil {
+		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
 
-	a.writeCreatedEntry(rw, r, input.Word, input.Meaning, nil)
+	a.writeCreatedEntry(rw, r, input.Word, input.Meaning, input.Person, nil)
 }
 
 func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
@@ -130,6 +137,7 @@ func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
 
 	word := strings.TrimSpace(r.PostFormValue("word"))
 	meaning := strings.TrimSpace(r.PostFormValue("meaning"))
+	person := strings.TrimSpace(r.PostFormValue("person"))
 
 	photo, err := upload.Photo(r, "photo")
 	if err != nil {
@@ -140,12 +148,16 @@ func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if err := store.ValidatePerson(person); err != nil {
+		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
 
-	a.writeCreatedEntry(rw, r, word, meaning, photo)
+	a.writeCreatedEntry(rw, r, word, meaning, person, photo)
 }
 
-func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, meaning string, photo *store.Photo) {
-	entry, err := a.store.CreateEntry(r.Context(), word, meaning, photo)
+func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, meaning, person string, photo *store.Photo) {
+	entry, err := a.store.CreateEntry(r.Context(), word, meaning, person, photo)
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
 			httpx.WriteError(rw, http.StatusConflict, "duplicate_entry", "that entry is already in the ledger")

@@ -54,6 +54,28 @@
       </div>
     </section>
 
+    {{if .Recent}}
+    <section class="recent" aria-labelledby="recent-title">
+      <div class="recent-head">
+        <h2 id="recent-title" class="recent-title">Recent misspellings</h2>
+      </div>
+      <ol class="recent-list">
+        {{range .Recent}}
+        <li class="recent-item">
+          <a class="recent-link" href="/e/{{.ID}}">
+            {{if .Word}}<span class="recent-word">{{.Word}}</span>{{else}}<span class="recent-meaning photo-note">photo entry</span>{{end}}
+            {{if .Meaning}}<span class="recent-arrow" aria-hidden="true">→</span><span class="recent-meaning">{{.Meaning}}</span>{{end}}
+          </a>
+          <span class="recent-meta">
+            {{if .Person}}<span class="person-chip">{{.Person}}</span>{{end}}
+            <time class="recent-date" datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{.CreatedAt.Format "02 Jan"}}</time>
+          </span>
+        </li>
+        {{end}}
+      </ol>
+    </section>
+    {{end}}
+
     <section class="workspace" aria-label="Ledger">
       <form id="search-form" class="toolbar" action="/" method="get"
             hx-get="/entries" hx-target="#ledger" hx-swap="outerHTML"
@@ -73,6 +95,13 @@
           <select name="year" aria-label="Filter by year">
             <option value="">All</option>
             {{range .Ledger.Years}}<option value="{{.}}"{{if eq . $.Ledger.Query.Year}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <label class="pagesize pagesize-person">
+          <span>Person</span>
+          <select name="person" aria-label="Filter by person">
+            <option value="">Everyone</option>
+            {{range .Ledger.Persons}}<option value="{{.}}"{{if eq . $.Ledger.Query.Person}} selected{{end}}>{{.}}</option>{{end}}
           </select>
         </label>
         <label class="pagesize">

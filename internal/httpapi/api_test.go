@@ -370,6 +370,36 @@ func TestCreateEntryOversizedBody(t *testing.T) {
 	}
 }
 
+func TestListEntryPersonFilter(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	payload := `{"word":"persoon","meaning":"person","person":"  Alice  "}`
+	resp, err := http.Post(srv.URL+"/api/v1/entries", "application/json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var created store.Entry
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Person != "Alice" {
+		t.Fatalf("person = %q, want trimmed Alice", created.Person)
+	}
+
+	var page store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?person=alice&per_page=100", &page)
+	if page.Total != 1 || len(page.Entries) != 1 || page.Entries[0].ID != created.ID {
+		t.Fatalf("person filter page = %+v, want only the created entry", page)
+	}
+	if page.Entries[0].Person != "Alice" {
+		t.Fatalf("filtered person = %q, want Alice", page.Entries[0].Person)
+	}
+}
+
 func TestRateLimit(t *testing.T) {
 	srv, _ := newTestAPI(t, ratelimit.New(1, 1))
 

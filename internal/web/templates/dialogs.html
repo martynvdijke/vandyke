@@ -23,6 +23,11 @@
         <input type="text" name="meaning" value="{{.FormMeaning}}" maxlength="500" placeholder="bv. feature" autocomplete="off">
       </label>
       <label class="field">
+        <span class="field-label">Who said it <span class="field-optional">optional</span></span>
+        <input type="text" name="person" maxlength="100" placeholder="bv. M. van Dijke" autocomplete="off" aria-describedby="person-hint">
+        <span id="person-hint" class="field-hint">Leave blank for an anonymous slip.</span>
+      </label>
+      <label class="field">
         <span class="field-label">Photo <span class="field-optional">optional</span></span>
         <input type="file" name="photo" accept="image/jpeg,image/png,image/gif,image/webp" capture="environment" aria-describedby="photo-hint">
         <span id="photo-hint" class="field-hint">JPEG, PNG, GIF or WebP, up to 10&nbsp;MB. With a photo the text fields may be left empty.</span>

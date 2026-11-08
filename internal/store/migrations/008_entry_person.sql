@@ -1,0 +1,3 @@
+ALTER TABLE entries ADD COLUMN person TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_entries_person ON entries (person COLLATE NOCASE);

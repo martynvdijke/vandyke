@@ -112,7 +112,7 @@ func TestSearchFiltersYearsAndIndexUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	photoEntry, err := st.CreateEntry(ctx, "foto", "", photo)
+	photoEntry, err := st.CreateEntry(ctx, "foto", "", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry photo: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestSeedOnlyImportedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open first: %v", err)
 	}
-	if _, err := first.CreateEntry(ctx, "nieuw", "nieuw correct", nil); err != nil {
+	if _, err := first.CreateEntry(ctx, "nieuw", "nieuw correct", "", nil); err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
 	if err := first.Close(); err != nil {
@@ -345,12 +345,12 @@ func TestCreateEntryValidationAndTrimming(t *testing.T) {
 		{"word", strings.Repeat("y", MaxMeaningLen+1)},
 	}
 	for _, tc := range invalid {
-		if _, err := st.CreateEntry(ctx, tc.word, tc.meaning, nil); err == nil {
+		if _, err := st.CreateEntry(ctx, tc.word, tc.meaning, "", nil); err == nil {
 			t.Errorf("CreateEntry(%q, %q) succeeded, want validation error", tc.word, tc.meaning)
 		}
 	}
 
-	entry, err := st.CreateEntry(ctx, "  nieuw woord  ", "  nieuwe correctie  ", nil)
+	entry, err := st.CreateEntry(ctx, "  nieuw woord  ", "  nieuwe correctie  ", "", nil)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -374,14 +374,14 @@ func TestCreateEntryRejectsDuplicates(t *testing.T) {
 	st := newTestStore(t)
 	clearEntries(t, st)
 
-	if _, err := st.CreateEntry(ctx, "Dubbel", "dubbel", nil); err != nil {
+	if _, err := st.CreateEntry(ctx, "Dubbel", "dubbel", "", nil); err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	if _, err := st.CreateEntry(ctx, "  dubbel  ", "DUBBEL", nil); !errors.Is(err, ErrDuplicate) {
+	if _, err := st.CreateEntry(ctx, "  dubbel  ", "DUBBEL", "", nil); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("duplicate CreateEntry error = %v, want ErrDuplicate", err)
 	}
 
-	other, err := st.CreateEntry(ctx, "ander", "anders", nil)
+	other, err := st.CreateEntry(ctx, "ander", "anders", "", nil)
 	if err != nil {
 		t.Fatalf("CreateEntry other: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestCreatePhotoEntry(t *testing.T) {
 		t.Fatalf("photo metadata = %+v", photo)
 	}
 
-	entry, err := st.CreateEntry(ctx, "  foto  ", "  photo  ", photo)
+	entry, err := st.CreateEntry(ctx, "  foto  ", "  photo  ", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry with photo: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestPhotoOnlyEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(ctx, "", "   ", photo)
+	entry, err := st.CreateEntry(ctx, "", "   ", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry(photo only): %v", err)
 	}
@@ -608,7 +608,7 @@ func TestUpdateEntryFieldsAndPhoto(t *testing.T) {
 	st := newTestStore(t)
 	clearEntries(t, st)
 
-	entry, err := st.CreateEntry(ctx, "wrong", "right", nil)
+	entry, err := st.CreateEntry(ctx, "wrong", "right", "", nil)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -647,6 +647,71 @@ func TestUpdateEntryFieldsAndPhoto(t *testing.T) {
 	}
 }
 
+func TestEntryPersonCreateFilterUpdateAndList(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	alice, err := st.CreateEntry(ctx, "alice-word", "alice-meaning", "  Alice  ", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry alice: %v", err)
+	}
+	if alice.Person != "Alice" {
+		t.Fatalf("person = %q, want trimmed Alice", alice.Person)
+	}
+	if _, err := st.CreateEntry(ctx, "bob-word", "bob-meaning", "Bob", nil); err != nil {
+		t.Fatalf("CreateEntry bob: %v", err)
+	}
+	if _, err := st.CreateEntry(ctx, "anon-word", "anon-meaning", "", nil); err != nil {
+		t.Fatalf("CreateEntry anonymous: %v", err)
+	}
+	if _, err := st.CreateEntry(ctx, "long-word", "long-meaning", strings.Repeat("x", MaxPersonLen+1), nil); err == nil {
+		t.Fatal("CreateEntry with oversized person succeeded, want validation error")
+	}
+
+	stored, err := st.GetEntry(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if stored.Person != "Alice" {
+		t.Fatalf("GetEntry person = %q, want Alice", stored.Person)
+	}
+
+	page, err := st.ListEntries(ctx, ListParams{Person: " alice "})
+	if err != nil {
+		t.Fatalf("ListEntries person: %v", err)
+	}
+	if page.Total != 1 || page.Entries[0].ID != alice.ID {
+		t.Fatalf("person filter = %+v, want only Alice entry", page)
+	}
+
+	updated, err := st.UpdateEntry(ctx, EntryUpdate{
+		ID: alice.ID, Word: "alice-word", Meaning: "alice-meaning", Person: "  Carol  ",
+	})
+	if err != nil {
+		t.Fatalf("UpdateEntry person: %v", err)
+	}
+	if updated.Person != "Carol" {
+		t.Fatalf("updated person = %q, want Carol", updated.Person)
+	}
+	page, err = st.ListEntries(ctx, ListParams{Person: "carol"})
+	if err != nil {
+		t.Fatalf("ListEntries updated person: %v", err)
+	}
+	if page.Total != 1 || page.Entries[0].ID != alice.ID {
+		t.Fatalf("updated person filter = %+v, want only Carol entry", page)
+	}
+
+	persons, err := st.Persons(ctx)
+	if err != nil {
+		t.Fatalf("Persons: %v", err)
+	}
+	want := []string{"Bob", "Carol"}
+	if len(persons) != len(want) || persons[0] != want[0] || persons[1] != want[1] {
+		t.Fatalf("persons = %v, want %v", persons, want)
+	}
+}
+
 func TestDeleteEntriesCascadeAndSettings(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
@@ -656,7 +721,7 @@ func TestDeleteEntriesCascadeAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(ctx, "", "", photo)
+	entry, err := st.CreateEntry(ctx, "", "", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}

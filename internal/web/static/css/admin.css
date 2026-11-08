@@ -173,6 +173,18 @@
   overflow-wrap: anywhere;
 }
 
+.admin-col-word {
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
+}
+
+.admin-col-word .person-chip {
+  flex: none;
+  max-width: 9rem;
+  font-size: 0.66rem;
+  padding: 0.05rem 0.4rem 0.09rem;
+}
+
 .admin-col-date {
   font-size: 0.78rem;
   color: var(--ink-mute);

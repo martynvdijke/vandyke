@@ -95,6 +95,7 @@ type pageData struct {
 	Stats       store.Stats
 	SpanYears   int
 	Ledger      ledgerData
+	Recent      []store.Entry
 	Added       bool
 	ShowAdd     bool
 	ShowInfo    bool
@@ -106,6 +107,7 @@ type pageData struct {
 
 type ledgerData struct {
 	Entries   []store.Entry
+	Persons   []string
 	Query     ledgerQuery
 	Years     []int
 	Total     int
@@ -119,6 +121,7 @@ type ledgerQuery struct {
 	Q         string
 	Sort      string
 	Order     string
+	Person    string
 	Page      int
 	PerPage   int
 	PhotoOnly bool
@@ -151,6 +154,9 @@ func (q ledgerQuery) values() url.Values {
 	v := url.Values{}
 	if q.Q != "" {
 		v.Set("q", q.Q)
+	}
+	if q.Person != "" {
+		v.Set("person", q.Person)
 	}
 	v.Set("sort", q.Sort)
 	v.Set("order", q.Order)
@@ -228,7 +234,12 @@ func (w *Web) handleLedger(rw http.ResponseWriter, r *http.Request) {
 		w.renderInternalError(rw, err)
 		return
 	}
-	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger})
+	recent, err := w.recentEntries(r)
+	if err != nil {
+		w.renderInternalError(rw, err)
+		return
+	}
+	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger, Recent: recent})
 }
 
 func (w *Web) handlePermalink(rw http.ResponseWriter, r *http.Request) {
@@ -328,6 +339,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 
 	word := strings.TrimSpace(r.PostFormValue("word"))
 	meaning := strings.TrimSpace(r.PostFormValue("meaning"))
+	person := strings.TrimSpace(r.PostFormValue("person"))
 
 	var photo *store.Photo
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
@@ -353,8 +365,17 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if err := store.ValidatePerson(person); err != nil {
+		message := capitalize(err.Error())
+		if isHTMX {
+			w.renderFormError(rw, message)
+		} else {
+			w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning)
+		}
+		return
+	}
 
-	entry, err := w.store.CreateEntry(r.Context(), word, meaning, photo)
+	entry, err := w.store.CreateEntry(r.Context(), word, meaning, person, photo)
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
 			const message = "That entry is already in the ledger."
@@ -385,7 +406,12 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		w.renderInternalError(rw, err)
 		return
 	}
-	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger})
+	recent, err := w.recentEntries(r)
+	if err != nil {
+		w.renderInternalError(rw, err)
+		return
+	}
+	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger, Recent: recent})
 }
 
 func (w *Web) buildPage(r *http.Request) (pageData, error) {
@@ -404,16 +430,34 @@ func (w *Web) buildPage(r *http.Request) (pageData, error) {
 		}
 	}
 	query := r.URL.Query()
+	recent, err := w.recentEntries(r)
+	if err != nil {
+		return pageData{}, err
+	}
 	return pageData{
 		Umami:     w.umami(),
 		Stats:     stats,
 		SpanYears: span,
 		Ledger:    ledger,
+		Recent:    recent,
 		Added:     query.Get("added") == "1",
 		ShowAdd:   query.Get("add") == "1",
 		ShowInfo:  query.Get("info") == "1",
 		Year:      time.Now().Year(),
 	}, nil
+}
+
+// recentEntries returns the newest entries for the recent feed.
+func (w *Web) recentEntries(r *http.Request) ([]store.Entry, error) {
+	page, err := w.store.ListEntries(r.Context(), store.ListParams{
+		Sort:    "created_at",
+		Order:   "desc",
+		PerPage: 5,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return page.Entries, nil
 }
 
 func (w *Web) buildLedger(r *http.Request) (ledgerData, error) {
@@ -426,12 +470,18 @@ func (w *Web) buildLedger(r *http.Request) (ledgerData, error) {
 	if err != nil {
 		return ledgerData{}, err
 	}
+	persons, err := w.store.Persons(r.Context())
+	if err != nil {
+		return ledgerData{}, err
+	}
 	d := ledgerData{
 		Entries: page.Entries,
+		Persons: persons,
 		Query: ledgerQuery{
 			Q:         params.Query,
 			Sort:      params.Sort,
 			Order:     params.Order,
+			Person:    params.Person,
 			Page:      page.Page,
 			PerPage:   page.PerPage,
 			PhotoOnly: params.HasPhoto != nil && *params.HasPhoto,
@@ -455,6 +505,7 @@ func parseListParams(r *http.Request) store.ListParams {
 		Query:    r.FormValue("q"),
 		Sort:     r.FormValue("sort"),
 		Order:    r.FormValue("order"),
+		Person:   r.FormValue("person"),
 		Page:     formInt(r, "page", 1),
 		PerPage:  formInt(r, "per_page", store.DefaultPerPage),
 		HasPhoto: formOptionalBool(r, "photo", "filter_photo"),

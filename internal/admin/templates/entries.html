@@ -71,6 +71,7 @@
           <span class="admin-col-word" role="cell">
             {{if $e.PhotoURL}}<a class="entry-photo admin-thumb" href="{{$e.PhotoURL}}?size=display" target="_blank" rel="noopener" title="Open photo"><img src="{{$e.PhotoURL}}?size=thumb" alt="" loading="lazy" decoding="async"></a>{{end}}
             {{if $e.Word}}<span class="wrong">{{$e.Word}}</span>{{else}}<span class="photo-note">photo entry</span>{{end}}
+            {{if $e.Person}}<span class="person-chip">{{$e.Person}}</span>{{end}}
           </span>
           <span class="admin-col-meaning" role="cell">{{if $e.Meaning}}<span class="arrow" aria-hidden="true">→</span><span class="right">{{$e.Meaning}}</span>{{else}}<span class="photo-note">—</span>{{end}}</span>
           <time class="admin-col-date" role="cell" datetime="{{$e.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate $e.CreatedAt}}</time>

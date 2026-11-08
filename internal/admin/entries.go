@@ -28,6 +28,7 @@ type ledgerData struct {
 	Q         string
 	Sort      string
 	Order     string
+	Person    string
 	Page      int
 	Pages     int
 	PerPage   int
@@ -45,6 +46,7 @@ type editData struct {
 	Entry       store.Entry
 	FormWord    string
 	FormMeaning string
+	FormPerson  string
 	FormDate    string
 	FormRemove  bool
 	Error       string
@@ -93,6 +95,7 @@ func (a *Admin) buildLedger(r *http.Request) (ledgerData, error) {
 		Q:         params.Query,
 		Sort:      params.Sort,
 		Order:     params.Order,
+		Person:    params.Person,
 		Page:      page.Page,
 		Pages:     page.Pages,
 		PerPage:   page.PerPage,
@@ -113,6 +116,7 @@ func parseAdminListParams(r *http.Request) store.ListParams {
 		Query:    r.FormValue("q"),
 		Sort:     r.FormValue("sort"),
 		Order:    r.FormValue("order"),
+		Person:   r.FormValue("person"),
 		Page:     adminFormInt(r, "page", 1),
 		PerPage:  adminFormInt(r, "per_page", store.DefaultPerPage),
 		HasPhoto: adminFormOptionalBool(r, "photo"),
@@ -148,6 +152,9 @@ func (d ledgerData) values() url.Values {
 	v := url.Values{}
 	if d.Q != "" {
 		v.Set("q", d.Q)
+	}
+	if d.Person != "" {
+		v.Set("person", d.Person)
 	}
 	v.Set("sort", d.Sort)
 	v.Set("order", d.Order)
@@ -271,6 +278,7 @@ func (a *Admin) handleEdit(rw http.ResponseWriter, r *http.Request) {
 		Entry:       entry,
 		FormWord:    entry.Word,
 		FormMeaning: entry.Meaning,
+		FormPerson:  entry.Person,
 		FormDate:    entry.CreatedAt.Format("2006-01-02"),
 	})
 }
@@ -291,8 +299,13 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_ = r.ParseForm()
 	word := strings.TrimSpace(r.FormValue("word"))
 	meaning := strings.TrimSpace(r.FormValue("meaning"))
+	person := entry.Person
+	if _, ok := r.PostForm["person"]; ok {
+		person = strings.TrimSpace(r.PostFormValue("person"))
+	}
 	dateRaw := strings.TrimSpace(r.FormValue("date"))
 	removePhoto := r.FormValue("remove_photo") == "1"
 
@@ -300,7 +313,7 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 	if dateRaw != "" && dateRaw != entry.CreatedAt.Format("2006-01-02") {
 		parsed, parseErr := time.Parse("2006-01-02", dateRaw)
 		if parseErr != nil {
-			a.renderEditError(rw, r, entry, word, meaning, dateRaw, removePhoto,
+			a.renderEditError(rw, r, entry, word, meaning, person, dateRaw, removePhoto,
 				"Use a valid date in YYYY-MM-DD format.")
 			return
 		}
@@ -311,11 +324,11 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 
 	photo, err := upload.Photo(r, "photo")
 	if err != nil {
-		a.renderEditError(rw, r, entry, word, meaning, dateRaw, removePhoto, capitalize(err.Error()))
+		a.renderEditError(rw, r, entry, word, meaning, person, dateRaw, removePhoto, capitalize(err.Error()))
 		return
 	}
 	updated, err := a.store.UpdateEntry(r.Context(), store.EntryUpdate{
-		ID: id, Word: word, Meaning: meaning, CreatedAt: createdAt,
+		ID: id, Word: word, Meaning: meaning, Person: person, CreatedAt: createdAt,
 		Photo: photo, RemovePhoto: removePhoto,
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -323,7 +336,7 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		a.renderEditError(rw, r, entry, word, meaning, dateRaw, removePhoto, capitalize(err.Error()))
+		a.renderEditError(rw, r, entry, word, meaning, person, dateRaw, removePhoto, capitalize(err.Error()))
 		return
 	}
 	_ = updated
@@ -331,7 +344,7 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) renderEditError(rw http.ResponseWriter, r *http.Request, entry store.Entry,
-	word, meaning, date string, remove bool, message string) {
+	word, meaning, person, date string, remove bool, message string) {
 	state := stateFrom(r)
 	a.render(rw, http.StatusUnprocessableEntity, "admin-edit", editData{
 		Admin:       state.Admin,
@@ -340,6 +353,7 @@ func (a *Admin) renderEditError(rw http.ResponseWriter, r *http.Request, entry s
 		Entry:       entry,
 		FormWord:    word,
 		FormMeaning: meaning,
+		FormPerson:  person,
 		FormDate:    date,
 		FormRemove:  remove,
 		Error:       message,

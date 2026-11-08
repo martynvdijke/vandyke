@@ -25,12 +25,17 @@
         <input type="text" name="meaning" value="{{.FormMeaning}}" maxlength="500" autocomplete="off">
         <span class="field-hint">Optional when a photo is present.</span>
       </label>
+      <label class="field">
+        <span class="field-label">Who said it <span class="field-optional">optional</span></span>
+        <input type="text" name="person" value="{{.FormPerson}}" maxlength="100" placeholder="M. van Dijke" autocomplete="off">
+        <span class="field-hint">Leave blank for an anonymous slip.</span>
+      </label>
+      <label class="field field-date">
+        <span class="field-label">Logged date</span>
+        <input type="date" name="date" value="{{.FormDate}}" required>
+        <span class="field-hint">The time of day is preserved from the original entry.</span>
+      </label>
     </div>
-    <label class="field field-date">
-      <span class="field-label">Logged date</span>
-      <input type="date" name="date" value="{{.FormDate}}" required>
-      <span class="field-hint">The time of day is preserved from the original entry.</span>
-    </label>
 
     {{if .Entry.PhotoURL}}
     <div class="admin-current-photo">

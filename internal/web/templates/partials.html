@@ -2,7 +2,7 @@
 <section id="ledger" class="ledger" aria-live="polite">
   <div class="ledger-meta">
     <p class="ledger-count">
-      {{if .Ledger.Total}}<strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong> entries{{else}}No entries{{end}}{{if .Ledger.Query.Q}} for “{{.Ledger.Query.Q}}”{{end}}{{if .Ledger.Query.PhotoOnly}} with photos{{end}}{{if gt .Ledger.Query.Year 0}} from {{.Ledger.Query.Year}}{{end}}
+      {{if .Ledger.Total}}<strong>{{.Ledger.From}}–{{.Ledger.To}}</strong> of <strong>{{.Ledger.Total}}</strong> entries{{else}}No entries{{end}}{{if .Ledger.Query.Q}} for “{{.Ledger.Query.Q}}”{{end}}{{if .Ledger.Query.PhotoOnly}} with photos{{end}}{{if gt .Ledger.Query.Year 0}} from {{.Ledger.Query.Year}}{{end}}{{if .Ledger.Query.Person}} by {{.Ledger.Query.Person}}{{end}}
     </p>
     <p class="ledger-sort">sorted by {{.Ledger.Query.SortLabel}}<span class="dot" aria-hidden="true">·</span>misspelling <span class="arrow-mini" aria-hidden="true">→</span> correction</p>
   </div>
@@ -22,6 +22,7 @@
         <span class="col-word" role="cell">
           {{if $entry.PhotoURL}}<a class="entry-photo" href="{{$entry.PhotoURL}}?size=display" target="_blank" rel="noopener" title="Open photo"><img src="{{$entry.PhotoURL}}?size=thumb" alt="Photo attached to entry {{entryNo $entry.ID}}" loading="lazy" decoding="async"></a>{{end}}
           {{if $entry.Word}}<span class="wrong">{{$entry.Word}}</span>{{end}}
+          {{if $entry.Person}}<span class="person-chip">{{$entry.Person}}</span>{{end}}
         </span>
         <span class="col-meaning" role="cell">
           {{if $entry.Meaning}}<span class="arrow" aria-hidden="true">→</span><span class="right">{{$entry.Meaning}}</span>{{else}}<span class="photo-note">photo entry</span>{{end}}

@@ -146,7 +146,7 @@ func TestBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(t.Context(), "foto", "photo", photo)
+	entry, err := st.CreateEntry(t.Context(), "foto", "photo", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}

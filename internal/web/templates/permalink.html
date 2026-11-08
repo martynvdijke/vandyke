@@ -41,6 +41,7 @@
       <p class="eyebrow">Entry {{entryNo .Entry.ID}}</p>
       {{if .Entry.Word}}<h1 class="permalink-word">{{.Entry.Word}}</h1>{{else}}<h1 class="permalink-word permalink-word-photo">Photo entry</h1>{{end}}
       {{if .Entry.Meaning}}<p class="permalink-meaning"><span class="arrow" aria-hidden="true">→</span> {{.Entry.Meaning}}</p>{{end}}
+      {{if .Entry.Person}}<p class="permalink-person"><span class="person-chip">{{.Entry.Person}}</span></p>{{end}}
       {{if .Entry.PhotoURL}}
       <figure class="permalink-photo">
         <a href="{{.Entry.PhotoURL}}?size=display" target="_blank" rel="noopener">

@@ -281,7 +281,7 @@ func TestAdminOriginalPhotoDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	entry, err := st.CreateEntry(t.Context(), "original", "photo", photo)
+	entry, err := st.CreateEntry(t.Context(), "original", "photo", "", photo)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestAdminFiltersRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	if _, err := st.CreateEntry(t.Context(), "filter", "photo", photo); err != nil {
+	if _, err := st.CreateEntry(t.Context(), "filter", "photo", "", photo); err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
 
