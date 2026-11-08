@@ -117,11 +117,12 @@ stable envelope:
 
 | Method & path | Description |
 | --- | --- |
-| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`). |
+| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`), `person` (exact name, case-insensitive). |
 | `GET /api/v1/entries/{id}` | Single entry. `404` when missing. |
-| `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning` and an optional `photo` file. `201` with `Location`; `409` when the entry already exists; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
+| `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "...", "person": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning`, optional `person` and an optional `photo` file. `person` is the slip's author and may be omitted. `201` with `Location`; `409` when the entry already exists; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
 | `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo. The original upload is available only to admins. |
 | `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`. |
+| `GET /api/v1/persons` | Distinct attributed persons with counts: `{"items": [{"person": "M. van Dijke", "count": 12}], "total": 3}`, ordered case-insensitively. Unattributed entries are not listed. |
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
 
 Examples:
@@ -129,6 +130,8 @@ Examples:
 ```sh
 curl -s 'localhost:8080/api/v1/entries?q=boeke&per_page=5'
 curl -s 'localhost:8080/api/v1/entries?photo=1&year=2026'
+curl -s 'localhost:8080/api/v1/entries?person=Marieke'
+curl -s localhost:8080/api/v1/persons
 curl -s localhost:8080/api/v1/entries/1
 curl -s -o thumb.jpg 'localhost:8080/api/v1/entries/1/photo?size=thumb'
 curl -s localhost:8080/api/v1/stats
