@@ -1,0 +1,385 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../providers.dart';
+import '../utils.dart';
+import '../widgets/common.dart';
+import '../widgets/entry_card.dart';
+import '../widgets/log_misspelling_sheet.dart';
+
+class LedgerScreen extends ConsumerStatefulWidget {
+  const LedgerScreen({super.key});
+
+  @override
+  ConsumerState<LedgerScreen> createState() => _LedgerScreenState();
+}
+
+class _LedgerScreenState extends ConsumerState<LedgerScreen> {
+  final _search = TextEditingController();
+  final _scroll = ScrollController();
+  Timer? _debounce;
+  bool _showSearchHint = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    _scroll
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final remaining =
+        _scroll.position.maxScrollExtent - _scroll.position.pixels;
+    if (remaining < 420) {
+      ref.read(ledgerProvider.notifier).loadMore();
+    }
+  }
+
+  void _onQueryChanged(String value) {
+    setState(() => _showSearchHint = value.trim().isNotEmpty);
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      ref.read(ledgerProvider.notifier).setQuery(value);
+    });
+  }
+
+  void _clearQuery() {
+    _debounce?.cancel();
+    _search.clear();
+    setState(() => _showSearchHint = false);
+    ref.read(ledgerProvider.notifier).setQuery('');
+  }
+
+  Future<void> _refresh() async {
+    await ref.read(ledgerProvider.notifier).refresh();
+  }
+
+  Future<void> _openLogSheet() async {
+    final entry = await showLogMisspellingSheet(context);
+    if (entry == null || !mounted) return;
+    await ref.read(ledgerProvider.notifier).acceptCreated(entry);
+    if (mounted) {
+      showVandykeSnack(context, '“${entry.word}” added to the ledger.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final state = ref.watch(ledgerProvider);
+    final stats = ref.watch(statsProvider);
+    return Scaffold(
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Eyebrow('The LANCo corrections ledger'),
+                  const SizedBox(height: 4),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'The Ledger',
+                          style: theme.textTheme.displaySmall,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Log a new misspelling',
+                        onPressed: _openLogSheet,
+                        icon: const Icon(Icons.add_circle_outline),
+                        color: theme.colorScheme.primary,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    state.query.isEmpty
+                        ? 'Every creative spelling of the name, filed for the record.'
+                        : 'Results for “${state.query}”.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _StatsStrip(
+                    total: stats.value?.total ?? state.total,
+                    unique: stats.value?.uniqueWords ?? 0,
+                    last30: stats.value?.entriesLast30Days ?? 0,
+                    loading: stats.isLoading,
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _search,
+                    onChanged: _onQueryChanged,
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: 'Search the misspellings',
+                      prefixIcon: const Icon(Icons.search, size: 20),
+                      suffixIcon: _showSearchHint
+                          ? IconButton(
+                              tooltip: 'Clear search',
+                              onPressed: _clearQuery,
+                              icon: const Icon(Icons.close, size: 18),
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Text(
+                        state.loading
+                            ? 'Searching…'
+                            : '${pluralize(state.total, 'entry', 'entries')} on file',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      const Spacer(),
+                      _SortChip(
+                        label: state.sort.label,
+                        icon: state.sort == LedgerSort.newest
+                            ? Icons.south
+                            : Icons.sort_by_alpha,
+                        onTap: () =>
+                            ref.read(ledgerProvider.notifier).toggleSort(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+            Expanded(child: _buildBody(state, theme)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(LedgerState state, ThemeData theme) {
+    if (state.loading && state.items.isEmpty) {
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if (state.error.isNotEmpty && state.items.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(22, 8, 22, 32),
+        children: [
+          ErrorPanel(
+            message: state.error,
+            onRetry: () => ref.read(ledgerProvider.notifier).refresh(),
+          ),
+        ],
+      );
+    }
+    if (state.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(22, 8, 22, 32),
+        children: [
+          EmptyState(
+            title: state.query.isEmpty
+                ? 'The ledger is blank'
+                : 'No misspellings match',
+            message: state.query.isEmpty
+                ? 'Log the first creative spelling of the name.'
+                : 'Try a shorter fragment, or clear the search to see every entry.',
+            icon: state.query.isEmpty
+                ? Icons.menu_book_outlined
+                : Icons.search_off,
+            actionLabel: state.query.isEmpty ? 'Log a misspelling' : 'Clear',
+            onAction: state.query.isEmpty ? _openLogSheet : _clearQuery,
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        if (state.error.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 0, 22, 10),
+            child: ErrorPanel(
+              message: state.error,
+              onRetry: () => ref.read(ledgerProvider.notifier).refresh(),
+            ),
+          ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView.separated(
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(22, 8, 22, 96),
+              itemCount: state.items.length + (state.hasMore ? 1 : 0),
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                if (index >= state.items.length) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    child: Center(
+                      child: state.loadingMore
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : TextButton(
+                              onPressed: () =>
+                                  ref.read(ledgerProvider.notifier).loadMore(),
+                              child: const Text('Load more'),
+                            ),
+                    ),
+                  );
+                }
+                return EntryCard(entry: state.items[index]);
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatsStrip extends StatelessWidget {
+  const _StatsStrip({
+    required this.total,
+    required this.unique,
+    required this.last30,
+    required this.loading,
+  });
+
+  final int total;
+  final int unique;
+  final int last30;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    String figure(int value) => loading && value == 0 ? '—' : intlNumber(value);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: StatFigure(
+              value: figure(total),
+              label: 'Total',
+              emphasized: true,
+            ),
+          ),
+          _Divider(color: scheme.outlineVariant),
+          Expanded(
+            child: StatFigure(value: figure(unique), label: 'Unique'),
+          ),
+          _Divider(color: scheme.outlineVariant),
+          Expanded(
+            child: StatFigure(value: figure(last30), label: 'Last 30 days'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String intlNumber(int value) {
+    final digits = value.toString();
+    final buffer = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(',');
+      buffer.write(digits[i]);
+    }
+    return buffer.toString();
+  }
+}
+
+class _Divider extends StatelessWidget {
+  const _Divider({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 34,
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      color: color.withValues(alpha: .7),
+    );
+  }
+}
+
+class _SortChip extends StatelessWidget {
+  const _SortChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(999),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: scheme.primary, letterSpacing: 0.4),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

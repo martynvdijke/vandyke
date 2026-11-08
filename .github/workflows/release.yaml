@@ -98,6 +98,48 @@ jobs:
           docker push ghcr.io/martynvdijke/vandyke:latest
           docker push ghcr.io/martynvdijke/vandyke:$VERSION
 
+  android:
+    needs: [release]
+    if: needs.release.outputs.new_release_published == 'true'
+    name: Android APK
+    runs-on: ubuntu-latest
+    # Non-blocking: an Android build failure never fails the release or notify.
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v${{ needs.release.outputs.new_release_version }}
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Build release APK
+        working-directory: mobile
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Attach APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ needs.release.outputs.new_release_version }}
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk "vandyke-${VERSION}-android.apk"
+          gh release upload "v${VERSION}" "vandyke-${VERSION}-android.apk" --clobber
+
   notify:
     needs: [ci, release]
     if: ${{ always() }}

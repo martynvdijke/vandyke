@@ -15,14 +15,14 @@ plugins:
   - [
       "@semantic-release/exec",
       {
-        prepareCmd: "sed -i 's/var Version = \".*\"/var Version = \"${nextRelease.version}\"/' cmd/vandyke/main.go && python3 scripts/package-trmnl.py ${nextRelease.version}"
+        prepareCmd: "sed -i 's/var Version = \".*\"/var Version = \"${nextRelease.version}\"/' cmd/vandyke/main.go && python3 scripts/package-trmnl.py ${nextRelease.version} && sed -i 's/^version: .*/version: ${nextRelease.version}+1/' mobile/pubspec.yaml"
       }
     ]
   - [
       "@semantic-release/git",
       {
         message: "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
-        assets: ["CHANGELOG.md", "cmd/vandyke/main.go"]
+        assets: ["CHANGELOG.md", "cmd/vandyke/main.go", "mobile/pubspec.yaml"]
       }
     ]
   - [

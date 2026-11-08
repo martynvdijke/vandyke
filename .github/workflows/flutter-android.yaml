@@ -1,0 +1,72 @@
+name: Flutter Android
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - 'mobile/**'
+      - '.fvmrc'
+      - '.github/workflows/flutter-android.yaml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.fvmrc'
+      - '.github/workflows/flutter-android.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flutter-android:
+    name: Analyze, test, and build APK
+    runs-on: ubuntu-latest
+    # Non-blocking by design: a broken Android build never gates a release.
+    continue-on-error: true
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: mobile
+        run: flutter analyze
+
+      - name: Run tests
+        working-directory: mobile
+        run: flutter test
+
+      - name: Build APK
+        working-directory: mobile
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: vandyke-android-apk
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: ignore
+          retention-days: 30

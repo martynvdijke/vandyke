@@ -1,0 +1,11 @@
+# Static analysis for the vanDyke pocket ledger.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+
+linter:
+  rules:
+    prefer_single_quotes: true
