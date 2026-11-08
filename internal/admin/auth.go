@@ -28,6 +28,7 @@ type setupPage struct {
 	TokenRequired bool
 	Token         string
 	Username      string
+	OIDC          bool
 }
 
 func (a *Admin) handleLoginForm(rw http.ResponseWriter, r *http.Request) {
@@ -107,6 +108,7 @@ func (a *Admin) handleSetupForm(rw http.ResponseWriter, r *http.Request) {
 	a.render(rw, http.StatusOK, "setup", setupPage{
 		Umami:         a.settings.Current(),
 		TokenRequired: a.cfg.AdminSetupToken != "",
+		OIDC:          a.oidc != nil,
 	})
 }
 
@@ -135,6 +137,7 @@ func (a *Admin) handleSetup(rw http.ResponseWriter, r *http.Request) {
 			TokenRequired: a.cfg.AdminSetupToken != "",
 			Token:         token,
 			Username:      username,
+			OIDC:          a.oidc != nil,
 		})
 	}
 
@@ -184,15 +187,9 @@ func (a *Admin) handleOIDCStart(rw http.ResponseWriter, r *http.Request) {
 		http.NotFound(rw, r)
 		return
 	}
-	count, err := a.store.AdminCount(r.Context())
-	if err != nil {
-		a.internalError(rw, err)
-		return
-	}
-	if count == 0 {
-		http.Redirect(rw, r, "/admin/setup", http.StatusSeeOther)
-		return
-	}
+	// No AdminCount gate here: when the instance is fresh, the first identity to
+	// complete an OIDC login becomes the first admin. UpsertOIDCAdmin creates the
+	// row, and /admin/setup stays available for the username/password route.
 	state, err := auth.RandomToken(32)
 	if err != nil {
 		a.internalError(rw, err)

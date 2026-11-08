@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/base64"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
@@ -337,6 +339,34 @@ func TestAdminFiltersRender(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("admin filter missing %q", want)
 		}
+	}
+}
+
+func TestSetupPageOffersOIDCWhenConfigured(t *testing.T) {
+	// Only the names matter here: setup.html renders admin-head/admin-foot, which
+	// use none of the ledger helpers, so variadic stubs are enough to parse.
+	stub := func(...any) string { return "" }
+	funcs := template.FuncMap{
+		"entryNo": stub, "inc": stub, "dec": stub,
+		"formatDate": stub, "formatDateTime": stub,
+	}
+	tmpl, err := template.New("root").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
+	if err != nil {
+		t.Fatalf("parse templates: %v", err)
+	}
+	render := func(oidc bool) string {
+		t.Helper()
+		var buf bytes.Buffer
+		if err := tmpl.ExecuteTemplate(&buf, "setup", setupPage{OIDC: oidc}); err != nil {
+			t.Fatalf("render setup (oidc=%v): %v", oidc, err)
+		}
+		return buf.String()
+	}
+	if got := render(true); !strings.Contains(got, `href="/admin/oidc/start"`) {
+		t.Errorf("setup page with OIDC lacks the provider button:\n%s", got)
+	}
+	if got := render(false); strings.Contains(got, "/admin/oidc/start") {
+		t.Errorf("setup page without OIDC still offers the provider button:\n%s", got)
 	}
 }
 

@@ -161,6 +161,7 @@ func TestIndexRendersLedgerAndStats(t *testing.T) {
 		`hx-get="/entries"`,
 		`id="add-dialog"`,
 		`id="info-dialog"`,
+		`href="/admin/login"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index page does not contain %q", want)

@@ -34,9 +34,10 @@ services required.
 - **Admin ledger** — sign in to edit every field, replace or remove photos,
   correct logged dates, and delete entries individually or in bulk. Public
   additions stay open; only editing and deletion require an admin.
-- **First-run setup and OIDC** — create the first local admin at `/admin/setup`;
-  optionally add OpenID Connect for single sign-on. Login attempts are
-  rate-limited and sessions are stored in SQLite with CSRF protection.
+- **First-run setup and OIDC** — create the first admin at `/admin/setup` with a
+  username and password, or let the first OpenID Connect sign-in claim the
+  instance. Login attempts are rate-limited and sessions are stored in SQLite
+  with CSRF protection.
 - **Optional self-hosted Umami** — configure the tracker through the admin
   settings page or environment variables. Page views and custom events
   (`search`, `entry-added`, `theme-toggle`) are sent only when enabled; the CSP
@@ -180,8 +181,13 @@ register that URL with your provider unless you set `OIDC_REDIRECT_URL`.
 
 Any identity the provider successfully authenticates is auto-provisioned as an
 admin on first login. **The provider's own access policy is therefore the only
-boundary** — configure it accordingly. The first local admin still has to be
-created at `/admin/setup` before OIDC sign-in is available.
+boundary** — configure it accordingly.
+
+On a fresh instance you can go either way: `/admin/setup` still creates a local
+username and password, and while no admin exists that same page offers
+"Continue with OpenID Connect", where the first identity to finish signing in
+becomes the first admin. Once an admin exists, sign-in is available from the
+`Sign in` link in the site navigation or directly at `/admin/login`.
 
 ## Umami analytics
 

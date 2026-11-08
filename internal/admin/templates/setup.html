@@ -29,6 +29,11 @@
       </label>
       <button class="btn btn-primary" type="submit">Create admin</button>
     </form>
+    {{if .OIDC}}
+    <div class="admin-divider"><span>or</span></div>
+    <a class="btn btn-ghost admin-oidc" href="/admin/oidc/start">Continue with OpenID Connect</a>
+    <p class="field-hint admin-auth-oidc">The first identity to sign in this way becomes the first admin.</p>
+    {{end}}
     <p class="field-hint admin-auth-foot"><a href="/">← Back to the ledger</a></p>
   </section>
 </div>

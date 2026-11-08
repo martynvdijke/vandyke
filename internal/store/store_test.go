@@ -590,6 +590,11 @@ func TestOIDCAdminUpsert(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
+	// A fresh instance has no admin; the first OIDC identity to sign in creates one.
+	if count, err := st.AdminCount(ctx); err != nil || count != 0 {
+		t.Fatalf("AdminCount before first OIDC login = %d, %v; want 0", count, err)
+	}
+
 	first, err := st.UpsertOIDCAdmin(ctx, "https://id.example.com", "sub-1", "a@example.com", "Alice")
 	if err != nil {
 		t.Fatalf("UpsertOIDCAdmin: %v", err)
@@ -600,6 +605,16 @@ func TestOIDCAdminUpsert(t *testing.T) {
 	}
 	if first.ID != second.ID || second.Email != "b@example.com" || second.DisplayName != "Alice B" {
 		t.Fatalf("upsert did not update identity: first=%+v second=%+v", first, second)
+	}
+
+	if count, err := st.AdminCount(ctx); err != nil || count != 1 {
+		t.Fatalf("AdminCount after first OIDC login = %d, %v; want 1", count, err)
+	}
+	if first.HasPassword() {
+		t.Errorf("OIDC admin should not have a local password")
+	}
+	if first.OIDCIssuer != "https://id.example.com" || first.OIDCSubject != "sub-1" {
+		t.Errorf("OIDC identity not stored: %+v", first)
 	}
 }
 
