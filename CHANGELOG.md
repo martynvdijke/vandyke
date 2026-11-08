@@ -1,3 +1,11 @@
+# [1.5.0](https://github.com/martynvdijke/vandyke/compare/v1.4.8...v1.5.0) (2026-11-08)
+
+
+### Features
+
+* **ledger:** tag the person behind each misspelling ([eaa1610](https://github.com/martynvdijke/vandyke/commit/eaa16100e99ef62f3859e837a66a61af8efa16f3))
+* **mobile:** add Flutter Android pocket ledger and APK release pipeline ([0573f10](https://github.com/martynvdijke/vandyke/commit/0573f10062925841aadaae5c2e1d0cd535161b13))
+
 ## [1.4.8](https://github.com/martynvdijke/vandyke/compare/v1.4.7...v1.4.8) (2026-11-07)
 
 
