@@ -102,6 +102,7 @@ type pageData struct {
 	FormError   string
 	FormWord    string
 	FormMeaning string
+	FormPerson  string
 	Year        int
 }
 
@@ -314,7 +315,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.renderFormError(rw, message)
 		} else {
-			w.renderIndexError(rw, r, http.StatusTooManyRequests, message, "", "")
+			w.renderIndexError(rw, r, http.StatusTooManyRequests, message, "", "", "")
 		}
 		return
 	}
@@ -329,7 +330,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.renderFormError(rw, message)
 		} else {
-			w.renderIndexError(rw, r, http.StatusRequestEntityTooLarge, message, "", "")
+			w.renderIndexError(rw, r, http.StatusRequestEntityTooLarge, message, "", "", "")
 		}
 		return
 	}
@@ -350,7 +351,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 			if isHTMX {
 				w.renderFormError(rw, message)
 			} else {
-				w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning)
+				w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning, person)
 			}
 			return
 		}
@@ -361,7 +362,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.renderFormError(rw, message)
 		} else {
-			w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning)
+			w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning, person)
 		}
 		return
 	}
@@ -370,7 +371,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.renderFormError(rw, message)
 		} else {
-			w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning)
+			w.renderIndexError(rw, r, http.StatusUnprocessableEntity, message, word, meaning, person)
 		}
 		return
 	}
@@ -382,7 +383,7 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 			if isHTMX {
 				w.renderFormError(rw, message)
 			} else {
-				w.renderIndexError(rw, r, http.StatusConflict, message, word, meaning)
+				w.renderIndexError(rw, r, http.StatusConflict, message, word, meaning, person)
 			}
 			return
 		}
@@ -581,7 +582,7 @@ func (w *Web) renderFormError(rw http.ResponseWriter, message string) {
 	w.render(rw, http.StatusOK, "form-error", message)
 }
 
-func (w *Web) renderIndexError(rw http.ResponseWriter, r *http.Request, status int, message, word, meaning string) {
+func (w *Web) renderIndexError(rw http.ResponseWriter, r *http.Request, status int, message, word, meaning, person string) {
 	page, err := w.buildPage(r)
 	if err != nil {
 		w.renderInternalError(rw, err)
@@ -591,6 +592,7 @@ func (w *Web) renderIndexError(rw http.ResponseWriter, r *http.Request, status i
 	page.FormError = message
 	page.FormWord = word
 	page.FormMeaning = meaning
+	page.FormPerson = person
 	w.render(rw, status, "base", page)
 }
 

@@ -377,8 +377,8 @@ button {
 
 .recent-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
-  gap: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.5rem 1.4rem;
   list-style: none;
   padding: 0;
 }
@@ -389,13 +389,24 @@ button {
   justify-content: space-between;
   gap: 0.3rem;
   min-width: 0;
-  padding-left: 1rem;
-  border-left: 1px solid var(--rule);
 }
 
-.recent-item:first-child {
-  padding-left: 0;
-  border-left: 0;
+/* Column rules only on the single-row desktop layout; below that the items
+   wrap to multiple rows and a per-item divider would land in the wrong place. */
+@media (min-width: 1001px) {
+  .recent-list {
+    column-gap: 0;
+  }
+
+  .recent-item {
+    padding-left: 1rem;
+    border-left: 1px solid var(--rule);
+  }
+
+  .recent-item:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 .recent-link {
@@ -1260,9 +1271,21 @@ button {
 }
 
 /* ---------- responsive ---------- */
+@media (max-width: 1000px) {
+  .recent-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 900px) {
   .searchbox {
     flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 700px) {
+  .recent-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1287,11 +1310,6 @@ button {
   .recent-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     row-gap: 0.7rem;
-  }
-
-  .recent-item:nth-child(odd) {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .entry .col-word .person-chip {
@@ -1474,11 +1492,6 @@ button {
   .recent-list {
     grid-template-columns: 1fr;
     row-gap: 0;
-  }
-
-  .recent-item {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .recent-item + .recent-item {
