@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/martynvdijke/vandyke/compare/v1.5.0...v1.5.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **web:** keep the person field when an inline add is rejected ([02011b0](https://github.com/martynvdijke/vandyke/commit/02011b0285e6cef12d7d5a1b306f781d43abfd92))
+
 # [1.5.0](https://github.com/martynvdijke/vandyke/compare/v1.4.8...v1.5.0) (2026-11-08)
 
 
