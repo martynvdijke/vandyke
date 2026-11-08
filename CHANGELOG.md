@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/martynvdijke/vandyke/compare/v1.6.0...v1.7.0) (2026-11-08)
+
+
+### Features
+
+* **api:** expose attributed persons with counts ([1fef04c](https://github.com/martynvdijke/vandyke/commit/1fef04cd65fcb7fa8a637a0a4957298614465fa9))
+
 # [1.6.0](https://github.com/martynvdijke/vandyke/compare/v1.5.2...v1.6.0) (2026-11-08)
 
 
