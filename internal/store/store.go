@@ -559,6 +559,40 @@ func (s *Store) Persons(ctx context.Context) ([]string, error) {
 	return persons, nil
 }
 
+// PersonCount is one attributed name and how many entries it has.
+type PersonCount struct {
+	Person string `json:"person"`
+	Count  int    `json:"count"`
+}
+
+// PersonCounts lists every attributed person with their entry tally,
+// ordered case-insensitively. It backs the filter pickers in the web UI and
+// the Android app.
+func (s *Store) PersonCounts(ctx context.Context) ([]PersonCount, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT person, COUNT(*) FROM entries
+		 WHERE person <> ''
+		 GROUP BY person COLLATE NOCASE
+		 ORDER BY person COLLATE NOCASE`)
+	if err != nil {
+		return nil, fmt.Errorf("query person counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var counts []PersonCount
+	for rows.Next() {
+		var pc PersonCount
+		if err := rows.Scan(&pc.Person, &pc.Count); err != nil {
+			return nil, fmt.Errorf("scan person count: %w", err)
+		}
+		counts = append(counts, pc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate person counts: %w", err)
+	}
+	return counts, nil
+}
+
 // indexEntry keeps the trigram search index in sync with an entry.
 func indexEntry(ctx context.Context, tx *sql.Tx, id int64, word, meaning string) error {
 	if _, err := tx.ExecContext(ctx,

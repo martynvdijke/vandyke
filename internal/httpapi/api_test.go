@@ -400,6 +400,38 @@ func TestListEntryPersonFilter(t *testing.T) {
 	}
 }
 
+func TestPersonsEndpoint(t *testing.T) {
+	srv, _ := newTestAPI(t, ratelimit.New(1000, 100))
+
+	for _, payload := range []string{
+		`{"word":"a1","meaning":"m1","person":"Alice"}`,
+		`{"word":"a2","meaning":"m2","person":"alice"}`,
+		`{"word":"b1","meaning":"m3","person":"Bob"}`,
+		`{"word":"n1","meaning":"m4"}`,
+	} {
+		resp, err := http.Post(srv.URL+"/api/v1/entries", "application/json", strings.NewReader(payload))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", resp.StatusCode)
+		}
+	}
+
+	var got personCountsResponse
+	getJSON(t, srv.URL+"/api/v1/persons", &got)
+	if got.Total != 2 || len(got.Items) != 2 {
+		t.Fatalf("persons = %+v, want two attributed names", got)
+	}
+	if got.Items[0].Person != "Alice" || got.Items[0].Count != 2 {
+		t.Fatalf("first person = %+v, want Alice with 2 entries", got.Items[0])
+	}
+	if got.Items[1].Person != "Bob" || got.Items[1].Count != 1 {
+		t.Fatalf("second person = %+v, want Bob with 1 entry", got.Items[1])
+	}
+}
+
 func TestRateLimit(t *testing.T) {
 	srv, _ := newTestAPI(t, ratelimit.New(1, 1))
 

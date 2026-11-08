@@ -42,6 +42,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/entries", a.rateLimited(a.handleCreateEntry))
 	mux.HandleFunc("GET /api/v1/entries/{id}/photo", a.handleGetEntryPhoto)
 	mux.HandleFunc("GET /api/v1/stats", a.handleStats)
+	mux.HandleFunc("GET /api/v1/persons", a.handlePersons)
 }
 
 func (a *API) handleHealth(rw http.ResponseWriter, _ *http.Request) {
@@ -221,6 +222,25 @@ func (a *API) handleStats(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(rw, http.StatusOK, stats)
+}
+
+type personCountsResponse struct {
+	Items []store.PersonCount `json:"items"`
+	Total int                 `json:"total"`
+}
+
+func (a *API) handlePersons(rw http.ResponseWriter, r *http.Request) {
+	counts, err := a.store.PersonCounts(r.Context())
+	if err != nil {
+		a.logger.Error("person counts", "error", err)
+		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not load persons")
+		return
+	}
+	if counts == nil {
+		counts = []store.PersonCount{}
+	}
+	rw.Header().Set("Cache-Control", "no-store")
+	httpx.WriteJSON(rw, http.StatusOK, personCountsResponse{Items: counts, Total: len(counts)})
 }
 
 // rateLimited applies the per-IP write limiter.
