@@ -71,7 +71,88 @@ void main() {
     expect(captured.url.queryParameters['order'], 'asc');
     expect(captured.url.queryParameters['page'], '2');
     expect(captured.url.queryParameters['per_page'], '25');
+    expect(captured.url.queryParameters.containsKey('person'), isFalse);
     expect(captured.headers['Accept'], 'application/json');
+  });
+
+  test('entries sends an encoded person filter', () async {
+    late http.Request captured;
+    final client = ApiClient(
+      serverUrl: 'https://vandyke.example.com',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode({
+            'items': <Object>[],
+            'total': 0,
+            'page': 1,
+            'per_page': 25,
+            'pages': 0,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final page = await client.entries(person: 'M. van Dijke & Co');
+
+    expect(
+      captured.url.queryParameters['person'],
+      'M. van Dijke & Co',
+    );
+    // Round-trips through URL encoding without losing the ampersand.
+    expect(captured.url.query, contains('person=M.+van+Dijke'));
+    expect(page.items, isEmpty);
+  });
+
+  test('persons parses the distinct-name endpoint', () async {
+    late http.Request captured;
+    final client = ApiClient(
+      serverUrl: 'https://vandyke.example.com',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode({
+            'items': [
+              {'person': 'Concierge', 'count': 4},
+              {'person': 'Reception', 'count': 12},
+            ],
+            'total': 2,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final persons = await client.persons();
+
+    expect(captured.method, 'GET');
+    expect(captured.url.path, '/api/v1/persons');
+    expect(persons.map((person) => person.person), ['Concierge', 'Reception']);
+    expect(persons.last.count, 12);
+  });
+
+  test('a missing persons endpoint is a typed not-found error', () async {
+    final client = ApiClient(
+      serverUrl: 'https://vandyke.example.com',
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'error': {'code': 'not_found', 'message': 'no such route'},
+          }),
+          404,
+        ),
+      ),
+    );
+
+    await expectLater(
+      client.persons(),
+      throwsA(
+        isA<ApiException>().having((e) => e.isNotFound, 'isNotFound', isTrue),
+      ),
+    );
   });
 
   test('createEntry posts JSON and returns the created entry', () async {

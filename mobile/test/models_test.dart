@@ -65,6 +65,38 @@ void main() {
     expect(page.hasMore, isFalse);
   });
 
+  test('PersonCount parses a name and its tally', () {
+    final person = PersonCount.fromJson({'person': '  Reception ', 'count': 12});
+    expect(person.person, 'Reception');
+    expect(person.count, 12);
+
+    final bare = PersonCount.fromJson({'person': 'Concierge'});
+    expect(bare.count, 0);
+  });
+
+  test('parsePersons reads the items envelope, sorts, and merges names', () {
+    final persons = parsePersons({
+      'items': [
+        {'person': 'zoe', 'count': 2},
+        {'person': 'Ana', 'count': 1},
+        {'person': 'ZOE', 'count': 3},
+        {'person': '   ', 'count': 9},
+        {'count': 4},
+      ],
+      'total': 3,
+    });
+
+    expect(persons.map((person) => person.person), ['Ana', 'zoe']);
+    expect(persons.first.count, 1);
+    expect(persons.last.count, 5);
+  });
+
+  test('parsePersons tolerates a missing payload', () {
+    expect(parsePersons(null), isEmpty);
+    expect(parsePersons({}), isEmpty);
+    expect(parsePersons({'items': 'nope'}), isEmpty);
+  });
+
   test('LedgerStats parses aggregate counters and dates', () {
     final stats = LedgerStats.fromJson({
       'total_entries': 123,

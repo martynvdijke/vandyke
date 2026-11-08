@@ -138,6 +138,47 @@ class EntriesPage {
   }
 }
 
+/// One attributed name and how many ledger entries carry it.
+class PersonCount {
+  const PersonCount({required this.person, this.count = 0});
+
+  final String person;
+  final int count;
+
+  factory PersonCount.fromJson(Map<String, dynamic> json) {
+    final map = lowerKeys(json);
+    return PersonCount(
+      person: stringOf(map, 'person').trim(),
+      count: intOf(map, 'count'),
+    );
+  }
+}
+
+/// Parses `GET /api/v1/persons` into a stable picker list.
+///
+/// The server already groups and orders case-insensitively; this repeats the
+/// work so a fallback or an older server can never produce duplicate chips.
+List<PersonCount> parsePersons(Object? payload) {
+  final merged = <String, PersonCount>{};
+  for (final row in asList(asMap(payload)['items'])) {
+    final entry = PersonCount.fromJson(row);
+    if (entry.person.isEmpty) continue;
+    final key = entry.person.toLowerCase();
+    final existing = merged[key];
+    merged[key] = existing == null
+        ? entry
+        : PersonCount(
+            person: existing.person,
+            count: existing.count + entry.count,
+          );
+  }
+  final persons = merged.values.toList()
+    ..sort(
+      (a, b) => a.person.toLowerCase().compareTo(b.person.toLowerCase()),
+    );
+  return persons;
+}
+
 /// Aggregate counters from `GET /api/v1/stats`.
 class LedgerStats {
   const LedgerStats({

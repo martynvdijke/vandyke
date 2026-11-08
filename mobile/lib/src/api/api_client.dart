@@ -52,6 +52,7 @@ class ApiClient {
 
   Future<EntriesPage> entries({
     String query = '',
+    String person = '',
     String sort = 'created_at',
     String order = 'desc',
     int page = 1,
@@ -63,6 +64,7 @@ class ApiClient {
       'sort': sort,
       'order': order,
       if (query.trim().isNotEmpty) 'q': query.trim(),
+      if (person.trim().isNotEmpty) 'person': person.trim(),
     };
     final decoded = await _send(
       'GET',
@@ -71,6 +73,15 @@ class ApiClient {
       route: '/entries',
     );
     return EntriesPage.fromJson(decoded);
+  }
+
+  /// Distinct attributed persons with their entry counts.
+  ///
+  /// Optional on the server: callers should tolerate a failure and fall back
+  /// to the persons already present in the feed.
+  Future<List<PersonCount>> persons() async {
+    final decoded = await _send('GET', '/persons', route: '/persons');
+    return parsePersons(decoded);
   }
 
   Future<Entry> createEntry({
