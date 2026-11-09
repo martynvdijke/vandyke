@@ -1,0 +1,139 @@
+{{define "stats"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The ledger in numbers · vanDyke</title>
+  <meta name="description" content="Statistics for the vanDyke misspelling ledger: slips per year, unique misspellings, photographs and the names that turn up most.">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  {{template "masthead" .}}
+
+  <main class="page stats-page">
+    <section class="stats-hero">
+      <p class="eyebrow">The ledger, counted</p>
+      <h1 class="stats-title">The ledger in numbers</h1>
+      <p class="stats-lede">Every slip of the pen, tallied. How much has been written down, when it began, and whose name keeps turning up.</p>
+    </section>
+
+    <section class="stats stats-figures" aria-label="Key figures">
+      <div class="stat">
+        <span class="stat-value">{{.Total}}</span>
+        <span class="stat-label">slips in the ledger</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.Unique}}</span>
+        <span class="stat-label">unique misspellings</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.Last30d}}</span>
+        <span class="stat-label">in the last 30 days</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.PhotoPct}}<span class="stat-unit">%</span></span>
+        <span class="stat-label">carry a photograph</span>
+      </div>
+    </section>
+
+    {{if .Empty}}
+    <section class="panel empty-panel">
+      <p class="panel-kicker">Nothing tallied yet</p>
+      <h2 class="panel-title">The ledger is still blank</h2>
+      <p class="empty-text">There is nothing to count. The first slip of the pen will start the chart — the columns, the years and the names all follow from there.</p>
+      <p class="empty-actions"><a class="btn btn-primary" href="/?add=1" data-dialog-open="#add-dialog">Add the first entry</a></p>
+    </section>
+    {{else}}
+    <div class="stats-columns">
+      <div class="stats-col">
+        <section class="panel span-panel" aria-labelledby="span-title">
+          <p class="panel-kicker">The span</p>
+          <h2 id="span-title" class="panel-title">From the first slip to the last</h2>
+          {{if .First}}
+          <p class="span-dates">
+            <span class="span-date">{{formatDateP .First}}</span>
+            <span class="span-arrow" aria-hidden="true">→</span>
+            <span class="span-date">{{formatDateP .Last}}</span>
+          </p>
+          <p class="span-note">A span of <strong>{{.SpanText}}</strong>, touching {{.SpanYears}} {{if eq .SpanYears 1}}calendar year{{else}}calendar years{{end}} — roughly {{.PerYear}} slips a year.</p>
+          {{else}}
+          <p class="span-note">No dates have been recorded yet.</p>
+          {{end}}
+        </section>
+
+        <section class="panel chart-panel" aria-labelledby="years-title">
+          <p class="panel-kicker">By year</p>
+          <h2 id="years-title" class="panel-title">Slips by year</h2>
+          {{if .Years}}
+          <p class="panel-sub">Every calendar year the ledger has known, the quiet ones included.</p>
+          <figure class="chart-figure">
+            <ol class="bars{{if le (len .Years) 12}} is-fitted{{end}}" style="--cols:{{len .Years}}" aria-label="Entries per year">
+              {{range .Years}}
+              <li class="bar-col{{if .Current}} is-current{{end}}{{if eq .Count 0}} is-quiet{{end}}">
+                <span class="bar-count">{{.Count}}</span>
+                <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="height:{{.Height}}%"></span></span>
+                <span class="bar-year">{{.Year}}</span>
+              </li>
+              {{end}}
+            </ol>
+            <figcaption class="chart-legend">
+              <span class="legend-mark" aria-hidden="true"></span> {{.Year}} so far
+            </figcaption>
+          </figure>
+          {{else}}
+          <p class="panel-note">No entries have been dated yet.</p>
+          {{end}}
+        </section>
+      </div>
+
+      <div class="stats-col">
+        <section class="panel persons-panel" aria-labelledby="persons-title">
+          <p class="panel-kicker">By name</p>
+          <h2 id="persons-title" class="panel-title">Most frequent slips</h2>
+          <p class="panel-sub">The names written on the most slips.</p>
+          {{if .Persons}}
+          <ol class="person-bars">
+            {{range .Persons}}
+            <li class="person-bar">
+              <span class="pb-head">
+                <span class="pb-name">{{.Person}}</span>
+                <span class="pb-count">{{.Count}}</span>
+              </span>
+              <span class="pb-track" aria-hidden="true"><span class="pb-fill" style="width:{{.Width}}%"></span></span>
+            </li>
+            {{end}}
+          </ol>
+          {{else}}
+          <p class="panel-note">No slip has been signed with a name yet.</p>
+          {{end}}
+        </section>
+
+        <section class="panel ledger-panel" aria-labelledby="ledger-title">
+          <p class="panel-kicker">The source</p>
+          <h2 id="ledger-title" class="panel-title">The ledger itself</h2>
+          <p class="panel-sub">These figures come straight from the same table the ledger is drawn from.</p>
+          <ul class="ledger-facts">
+            <li><span>First slip</span><span>{{formatDateP .First}}</span></li>
+            <li><span>Last addition</span><span>{{formatDateP .Last}}</span></li>
+            <li><span>Entries with a photo</span><span>{{.WithPhoto}}</span></li>
+          </ul>
+          <p class="panel-links">
+            <a href="/">Read the ledger</a>
+            <a href="/api/v1/entries">JSON API</a>
+          </p>
+        </section>
+      </div>
+    </div>
+    {{end}}
+  </main>
+
+  {{template "footer" .}}
+</body>
+</html>{{end}}

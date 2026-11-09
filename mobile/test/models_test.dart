@@ -66,7 +66,10 @@ void main() {
   });
 
   test('PersonCount parses a name and its tally', () {
-    final person = PersonCount.fromJson({'person': '  Reception ', 'count': 12});
+    final person = PersonCount.fromJson({
+      'person': '  Reception ',
+      'count': 12,
+    });
     expect(person.person, 'Reception');
     expect(person.count, 12);
 
@@ -112,6 +115,104 @@ void main() {
     expect(stats.firstEntryAt?.toUtc(), DateTime.utc(2019, 1, 2, 3, 4, 5));
     expect(stats.lastEntryAt?.toUtc(), DateTime.utc(2026, 11, 7, 12));
     expect(stats.firstEntryLabel, isNotEmpty);
+  });
+
+  test('YearCount parses a year and its tally', () {
+    final year = YearCount.fromJson({'year': '2026', 'count': 40});
+    expect(year.year, 2026);
+    expect(year.count, 40);
+    expect(YearCount.fromJson({'year': 2019}).count, 0);
+  });
+
+  test('LedgerStats parses the optional breakdowns', () {
+    final stats = LedgerStats.fromJson({
+      'total_entries': 214,
+      'unique_words': 63,
+      'entries_last_30_days': 9,
+      'with_photo': 42,
+      'by_year': [
+        {'year': 2026, 'count': 40},
+        {'year': 2019, 'count': 3},
+        {'year': 0, 'count': 99},
+      ],
+      'top_persons': [
+        {'person': 'Reception', 'count': 84},
+        {'person': 'Concierge', 'count': 31},
+        {'person': 'reception', 'count': 84},
+        {'person': '   ', 'count': 5},
+      ],
+      'first_entry_at': '2019-02-03T00:00:00Z',
+      'last_entry_at': '2026-11-07T12:00:00Z',
+    });
+
+    expect(stats.withPhoto, 42);
+    expect(stats.byYear.map((year) => year.year), [2019, 2026]);
+    expect(stats.byYear.first.count, 3);
+    expect(stats.topPersons.map((person) => person.person), [
+      'Reception',
+      'Concierge',
+    ]);
+    expect(stats.topPersons.first.count, 84);
+    expect(stats.hasPhotoShare, isTrue);
+    expect(stats.photoShare, closeTo(42 / 214, 0.0001));
+    expect(stats.photoShareLabel, '20%');
+    expect(stats.runningLabel, '7 years, 9 months');
+  });
+
+  test('LedgerStats degrades when the breakdowns are missing', () {
+    final stats = LedgerStats.fromJson({
+      'total_entries': 5,
+      'unique_words': 4,
+      'entries_last_30_days': 1,
+    });
+
+    expect(stats.withPhoto, isNull);
+    expect(stats.byYear, isEmpty);
+    expect(stats.topPersons, isEmpty);
+    expect(stats.hasPhotoShare, isFalse);
+    expect(stats.photoShare, 0);
+    expect(stats.photoShareLabel, '0%');
+    expect(stats.runningLabel, '—');
+  });
+
+  test('LedgerStats caps and orders top authors by tally', () {
+    final stats = LedgerStats.fromJson({
+      'total_entries': 300,
+      'unique_words': 40,
+      'entries_last_30_days': 2,
+      'top_persons': [
+        for (var i = 0; i < 12; i++) {'person': 'Person $i', 'count': i + 1},
+      ],
+    });
+
+    expect(stats.topPersons.length, 8);
+    expect(stats.topPersons.first.person, 'Person 11');
+    expect(stats.topPersons.first.count, 12);
+    expect(stats.topPersons.last.count, 5);
+  });
+
+  test('LedgerStats clamps a photo count larger than the ledger', () {
+    final stats = LedgerStats.fromJson({
+      'total_entries': 5,
+      'unique_words': 4,
+      'entries_last_30_days': 1,
+      'with_photo': 9,
+    });
+
+    expect(stats.photoShare, 1);
+    expect(stats.photoShareLabel, '100%');
+  });
+
+  test('LedgerStats handles a single-day ledger', () {
+    final stats = LedgerStats.fromJson({
+      'total_entries': 1,
+      'unique_words': 1,
+      'entries_last_30_days': 1,
+      'first_entry_at': '2026-11-07T08:00:00Z',
+      'last_entry_at': '2026-11-07T09:00:00Z',
+    });
+
+    expect(stats.runningLabel, 'a single day');
   });
 
   test('LedgerStats handles a ledger with no entries', () {

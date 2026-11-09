@@ -1,24 +1,10 @@
-{{define "base"}}<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>vanDyke — the LANCo misspelling ledger</title>
-  <meta name="description" content="A ledger of spelling errors, misheard words and creative typos. Born as an internal joke of the LANCo committee.">
-  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
-  <link rel="stylesheet" href="/static/fonts/fonts.css">
-  <link rel="stylesheet" href="/static/css/app.css">
-  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
-  <script src="/static/js/app.js"></script>
-</head>
-<body>
-  <div class="grain" aria-hidden="true"></div>
-
+{{define "masthead"}}
   <header class="masthead">
     <div class="masthead-inner">
       <a class="wordmark" href="/">vanDyke</a>
       <nav class="masthead-nav" aria-label="Main">
         <a class="nav-link" href="/?info=1" data-dialog-open="#info-dialog">The story</a>
+        <a class="nav-link" href="/stats">Stats</a>
         <a class="nav-link nav-link-muted" href="/api/v1/entries">API</a>
         <a class="nav-link nav-link-muted" href="/admin/login">Sign in</a>
         <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme">
@@ -28,6 +14,45 @@
       </nav>
     </div>
   </header>
+{{end}}
+
+{{define "footer"}}
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <span class="footer-word">vanDyke</span>
+        <p>An internal joke of the LANCo committee, rebuilt as a modern, self-hosted ledger. The original data was lovingly carried over from <a href="https://vandyke.thor.edu/">vandyke.thor.edu</a>.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://teslan.thor.edu/">TesLAN</a>
+        <a href="https://thor.edu/committee/lanco">LANCo committee</a>
+        <a href="/stats">Statistics</a>
+        <a href="/api/v1/entries">JSON API</a>
+        <a href="/healthz">Health</a>
+      </nav>
+      <p class="footer-fine">© 2017–{{.Year}} LANCo · <span class="footer-fix">kast systeem <span aria-hidden="true">→</span> kassasysteem</span></p>
+    </div>
+  </footer>
+{{end}}
+
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vanDyke — the LANCo misspelling ledger</title>
+  <meta name="description" content="A ledger of spelling errors, misheard words and creative typos. Born as an internal joke of the LANCo committee.">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  {{template "masthead" .}}
 
   <main class="page">
     <section class="hero">
@@ -36,23 +61,28 @@
       <p class="hero-lede">A ledger of <em>verschrijvingen</em> — misheard words, creative typos and other slips of the pen, collected by the LANCo committee. It began when M.&nbsp;van Dijke's surname turned out to double as a Dutch dictionary.</p>
     </section>
 
-    <section class="stats" aria-label="Ledger statistics">
-      <div class="stat">
-        <span class="stat-value">{{.Stats.Total}}</span>
-        <span class="stat-label">entries in the ledger</span>
+    <section class="stats-block" aria-label="Ledger statistics">
+      <div class="stats">
+        <div class="stat">
+          <span class="stat-value">{{.Stats.Total}}</span>
+          <span class="stat-label">entries in the ledger</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">{{.Stats.UniqueWords}}</span>
+          <span class="stat-label">unique misspellings</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">{{.SpanYears}}</span>
+          <span class="stat-label">years of slips</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value stat-value-date">{{formatDateP .Stats.LastEntryAt}}</span>
+          <span class="stat-label">last addition</span>
+        </div>
       </div>
-      <div class="stat">
-        <span class="stat-value">{{.Stats.UniqueWords}}</span>
-        <span class="stat-label">unique misspellings</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value">{{.SpanYears}}</span>
-        <span class="stat-label">years of slips</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value stat-value-date">{{formatDateP .Stats.LastEntryAt}}</span>
-        <span class="stat-label">last addition</span>
-      </div>
+      <p class="stats-more-row">
+        <a class="stats-more" href="/stats">The ledger in numbers <span aria-hidden="true">→</span></a>
+      </p>
     </section>
 
     {{if .Recent}}
@@ -120,21 +150,7 @@
     </section>
   </main>
 
-  <footer class="footer">
-    <div class="footer-inner">
-      <div class="footer-brand">
-        <span class="footer-word">vanDyke</span>
-        <p>An internal joke of the LANCo committee, rebuilt as a modern, self-hosted ledger. The original data was lovingly carried over from <a href="https://vandyke.thor.edu/">vandyke.thor.edu</a>.</p>
-      </div>
-      <nav class="footer-links" aria-label="Footer">
-        <a href="https://teslan.thor.edu/">TesLAN</a>
-        <a href="https://thor.edu/committee/lanco">LANCo committee</a>
-        <a href="/api/v1/entries">JSON API</a>
-        <a href="/healthz">Health</a>
-      </nav>
-      <p class="footer-fine">© 2017–{{.Year}} LANCo · <span class="footer-fix">kast systeem <span aria-hidden="true">→</span> kassasysteem</span></p>
-    </div>
-  </footer>
+  {{template "footer" .}}
 
   <a class="fab" href="/?add=1" data-dialog-open="#add-dialog" aria-label="Add a misspelling">+</a>
 

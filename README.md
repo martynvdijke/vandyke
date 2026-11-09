@@ -121,7 +121,7 @@ stable envelope:
 | `GET /api/v1/entries/{id}` | Single entry. `404` when missing. |
 | `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "...", "person": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning`, optional `person` and an optional `photo` file. `person` is the slip's author and may be omitted. `201` with `Location`; `409` when the entry already exists; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
 | `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo. The original upload is available only to admins. |
-| `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`. |
+| `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`, `with_photo`, `by_year` (`[{"year": 2026, "count": 12}]`) and `top_persons` (`[{"person": "Marieke", "count": 4}]`, the eight busiest names). |
 | `GET /api/v1/persons` | Distinct attributed persons with counts: `{"items": [{"person": "M. van Dijke", "count": 12}], "total": 3}`, ordered case-insensitively. Unattributed entries are not listed. |
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
 

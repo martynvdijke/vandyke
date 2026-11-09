@@ -173,18 +173,36 @@ List<PersonCount> parsePersons(Object? payload) {
           );
   }
   final persons = merged.values.toList()
-    ..sort(
-      (a, b) => a.person.toLowerCase().compareTo(b.person.toLowerCase()),
-    );
+    ..sort((a, b) => a.person.toLowerCase().compareTo(b.person.toLowerCase()));
   return persons;
 }
 
+/// One calendar year and how many entries were filed in it.
+class YearCount {
+  const YearCount({required this.year, this.count = 0});
+
+  final int year;
+  final int count;
+
+  factory YearCount.fromJson(Map<String, dynamic> json) {
+    final map = lowerKeys(json);
+    return YearCount(year: intOf(map, 'year'), count: intOf(map, 'count'));
+  }
+}
+
 /// Aggregate counters from `GET /api/v1/stats`.
+///
+/// The newer breakdowns (`with_photo`, `by_year`, `top_persons`) are optional:
+/// an older server omits them, so they stay null/empty and the screen hides
+/// those sections instead of drawing zeros.
 class LedgerStats {
   const LedgerStats({
     required this.total,
     required this.uniqueWords,
     required this.entriesLast30Days,
+    this.withPhoto,
+    this.byYear = const [],
+    this.topPersons = const [],
     this.firstEntryAt,
     this.lastEntryAt,
   });
@@ -192,6 +210,16 @@ class LedgerStats {
   final int total;
   final int uniqueWords;
   final int entriesLast30Days;
+
+  /// Entries carrying a photo, or null when the server doesn't report it.
+  final int? withPhoto;
+
+  /// Slips per year, oldest first.
+  final List<YearCount> byYear;
+
+  /// Most frequent authors, biggest first (at most eight).
+  final List<PersonCount> topPersons;
+
   final DateTime? firstEntryAt;
   final DateTime? lastEntryAt;
 
@@ -213,12 +241,66 @@ class LedgerStats {
     return DateFormat.yMMMd().format(value);
   }
 
+  bool get hasPhotoShare => withPhoto != null && total > 0;
+
+  /// Share of entries with photo evidence, clamped to 0…1.
+  double get photoShare {
+    final count = withPhoto;
+    if (count == null || total <= 0) return 0;
+    return (count / total).clamp(0.0, 1.0);
+  }
+
+  String get photoShareLabel => '${(photoShare * 100).round()}%';
+
+  /// How long the ledger has been running, from the first slip to the last.
+  String get runningLabel {
+    final first = firstEntryAt;
+    final last = lastEntryAt;
+    if (first == null || last == null) return '—';
+    final months = _monthsBetween(first, last);
+    if (months <= 0) return 'a single day';
+    final years = months ~/ 12;
+    final rest = months % 12;
+    if (years == 0) return rest == 1 ? '1 month' : '$rest months';
+    final yearLabel = years == 1 ? '1 year' : '$years years';
+    if (rest == 0) return yearLabel;
+    return '$yearLabel, $rest ${rest == 1 ? 'month' : 'months'}';
+  }
+
+  static int _monthsBetween(DateTime first, DateTime last) {
+    final months = (last.year - first.year) * 12 + (last.month - first.month);
+    return months < 0 ? 0 : months;
+  }
+
   factory LedgerStats.fromJson(Map<String, dynamic> json) {
     final map = lowerKeys(json);
+    final rawPhoto = map['with_photo'];
+
+    final byYear = <YearCount>[];
+    for (final row in asList(map['by_year'])) {
+      final year = YearCount.fromJson(row);
+      if (year.year > 0) byYear.add(year);
+    }
+    byYear.sort((a, b) => a.year.compareTo(b.year));
+
+    final topPersons = <PersonCount>[];
+    final seen = <String>{};
+    for (final row in asList(map['top_persons'])) {
+      final person = PersonCount.fromJson(row);
+      if (person.person.isEmpty) continue;
+      if (!seen.add(person.person.toLowerCase())) continue;
+      topPersons.add(person);
+    }
+    topPersons.sort((a, b) => b.count.compareTo(a.count));
+    if (topPersons.length > 8) topPersons.removeRange(8, topPersons.length);
+
     return LedgerStats(
       total: intOf(map, 'total_entries'),
       uniqueWords: intOf(map, 'unique_words'),
       entriesLast30Days: intOf(map, 'entries_last_30_days'),
+      withPhoto: rawPhoto == null ? null : intOf(map, 'with_photo'),
+      byYear: byYear,
+      topPersons: topPersons,
       firstEntryAt: _dateOf(map, 'first_entry_at'),
       lastEntryAt: _dateOf(map, 'last_entry_at'),
     );

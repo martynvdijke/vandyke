@@ -28,3 +28,15 @@ String pluralize(int count, String singular, [String? plural]) {
   if (count == 1) return '$count $singular';
   return '$count ${plural ?? '${singular}s'}';
 }
+
+/// Groups a count with commas: 1234 -> 1,234.
+String formatCount(int value) {
+  final negative = value < 0;
+  final digits = value.abs().toString();
+  final buffer = StringBuffer();
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(',');
+    buffer.write(digits[i]);
+  }
+  return negative ? '-$buffer' : buffer.toString();
+}

@@ -176,11 +176,14 @@ type Page struct {
 
 // Stats summarises the ledger.
 type Stats struct {
-	Total          int        `json:"total_entries"`
-	UniqueWords    int        `json:"unique_words"`
-	FirstEntryAt   *time.Time `json:"first_entry_at"`
-	LastEntryAt    *time.Time `json:"last_entry_at"`
-	EntriesLast30d int        `json:"entries_last_30_days"`
+	Total          int           `json:"total_entries"`
+	UniqueWords    int           `json:"unique_words"`
+	FirstEntryAt   *time.Time    `json:"first_entry_at"`
+	LastEntryAt    *time.Time    `json:"last_entry_at"`
+	EntriesLast30d int           `json:"entries_last_30_days"`
+	WithPhoto      int           `json:"with_photo"`
+	ByYear         []YearCount   `json:"by_year"`
+	TopPersons     []PersonCount `json:"top_persons"`
 }
 
 // Store wraps the SQLite database.
@@ -559,6 +562,12 @@ func (s *Store) Persons(ctx context.Context) ([]string, error) {
 	return persons, nil
 }
 
+// YearCount is one calendar year and how many entries were logged in it.
+type YearCount struct {
+	Year  int `json:"year"`
+	Count int `json:"count"`
+}
+
 // PersonCount is one attributed name and how many entries it has.
 type PersonCount struct {
 	Person string `json:"person"`
@@ -842,6 +851,49 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 			t = t.UTC()
 			stats.LastEntryAt = &t
 		}
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entry_photos`).Scan(&stats.WithPhoto); err != nil {
+		return Stats{}, fmt.Errorf("count photos: %w", err)
+	}
+	yearRows, err := s.db.QueryContext(ctx, `
+		SELECT CAST(strftime('%Y', created_at) AS INTEGER) AS year, COUNT(*)
+		FROM entries
+		GROUP BY year
+		ORDER BY year`)
+	if err != nil {
+		return Stats{}, fmt.Errorf("query entries by year: %w", err)
+	}
+	defer yearRows.Close()
+	for yearRows.Next() {
+		var yc YearCount
+		if err := yearRows.Scan(&yc.Year, &yc.Count); err != nil {
+			return Stats{}, fmt.Errorf("scan entries by year: %w", err)
+		}
+		stats.ByYear = append(stats.ByYear, yc)
+	}
+	if err := yearRows.Err(); err != nil {
+		return Stats{}, fmt.Errorf("iterate entries by year: %w", err)
+	}
+	personRows, err := s.db.QueryContext(ctx, `
+		SELECT person, COUNT(*)
+		FROM entries
+		WHERE person <> ''
+		GROUP BY person COLLATE NOCASE
+		ORDER BY COUNT(*) DESC, person COLLATE NOCASE
+		LIMIT 8`)
+	if err != nil {
+		return Stats{}, fmt.Errorf("query top persons: %w", err)
+	}
+	defer personRows.Close()
+	for personRows.Next() {
+		var pc PersonCount
+		if err := personRows.Scan(&pc.Person, &pc.Count); err != nil {
+			return Stats{}, fmt.Errorf("scan top persons: %w", err)
+		}
+		stats.TopPersons = append(stats.TopPersons, pc)
+	}
+	if err := personRows.Err(); err != nil {
+		return Stats{}, fmt.Errorf("iterate top persons: %w", err)
 	}
 	return stats, nil
 }

@@ -534,6 +534,82 @@ func TestStatsOnEmptyLedger(t *testing.T) {
 	}
 }
 
+func insertAttributed(t *testing.T, st *Store, word, meaning, person, createdAt string) int64 {
+	t.Helper()
+	id := insertRaw(t, st, word, meaning, createdAt)
+	if _, err := st.db.Exec(`UPDATE entries SET person = ? WHERE id = ?`, person, id); err != nil {
+		t.Fatalf("attribute entry: %v", err)
+	}
+	return id
+}
+
+func attachRawPhoto(t *testing.T, st *Store, entryID int64) {
+	t.Helper()
+	_, err := st.db.Exec(
+		`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size) VALUES (?, ?, ?, ?, ?)`,
+		entryID, "image/png", tinyPNG(t), "raw-test-sha256", 1,
+	)
+	if err != nil {
+		t.Fatalf("attach photo: %v", err)
+	}
+}
+
+func TestStatsAggregates(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	clearEntries(t, st)
+
+	first := insertAttributed(t, st, "alpha", "a", "Alice", "2024-03-04T10:00:00Z")
+	insertAttributed(t, st, "beta", "b", "alice", "2024-08-09T10:00:00Z")
+	third := insertAttributed(t, st, "gamma", "c", "ALICE", "2025-01-02T10:00:00Z")
+	insertAttributed(t, st, "delta", "d", "Bob", "2026-05-06T10:00:00Z")
+	insertAttributed(t, st, "epsilon", "e", "", "2026-05-07T10:00:00Z")
+	insertAttributed(t, st, "zeta", "f", "", "2026-05-08T10:00:00Z")
+	attachRawPhoto(t, st, first)
+	attachRawPhoto(t, st, third)
+
+	stats, err := st.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.WithPhoto != 2 {
+		t.Errorf("with photo = %d, want 2", stats.WithPhoto)
+	}
+	wantYears := []YearCount{{Year: 2024, Count: 2}, {Year: 2025, Count: 1}, {Year: 2026, Count: 3}}
+	if len(stats.ByYear) != len(wantYears) {
+		t.Fatalf("by year = %+v, want %+v", stats.ByYear, wantYears)
+	}
+	for i, want := range wantYears {
+		if stats.ByYear[i] != want {
+			t.Errorf("by year[%d] = %+v, want %+v", i, stats.ByYear[i], want)
+		}
+	}
+	wantPersons := []PersonCount{{Person: "Alice", Count: 3}, {Person: "Bob", Count: 1}}
+	if len(stats.TopPersons) != len(wantPersons) {
+		t.Fatalf("top persons = %+v, want %+v", stats.TopPersons, wantPersons)
+	}
+	for i, want := range wantPersons {
+		if stats.TopPersons[i] != want {
+			t.Errorf("top persons[%d] = %+v, want %+v", i, stats.TopPersons[i], want)
+		}
+	}
+
+	// The ranking keeps only the eight busiest names.
+	for i := 0; i < 10; i++ {
+		insertAttributed(t, st, "extra-"+strconv.Itoa(i), "x", "Person "+strconv.Itoa(i), "2026-06-0"+strconv.Itoa(i%9+1)+"T10:00:00Z")
+	}
+	stats, err = st.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats after extras: %v", err)
+	}
+	if len(stats.TopPersons) != 8 {
+		t.Fatalf("top persons length = %d, want 8 with LIMIT 8", len(stats.TopPersons))
+	}
+	if stats.TopPersons[0] != (PersonCount{Person: "Alice", Count: 3}) {
+		t.Errorf("leading person = %+v, want Alice with 3", stats.TopPersons[0])
+	}
+}
+
 func TestAdminAndSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)

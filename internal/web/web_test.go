@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
@@ -162,6 +163,8 @@ func TestIndexRendersLedgerAndStats(t *testing.T) {
 		`id="add-dialog"`,
 		`id="info-dialog"`,
 		`href="/admin/login"`,
+		`href="/stats"`,
+		"The ledger in numbers",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index page does not contain %q", want)
@@ -169,6 +172,71 @@ func TestIndexRendersLedgerAndStats(t *testing.T) {
 	}
 	if !strings.Contains(body, ">78<") {
 		t.Errorf("index page does not show the seeded entry count of 78")
+	}
+}
+
+func TestStatsPage(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	status, _, body := fetch(t, srv, "/stats", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	for _, want := range []string{
+		"The ledger in numbers",
+		"slips in the ledger",
+		"unique misspellings",
+		"carry a photograph",
+		"Slips by year",
+		"Most frequent slips",
+		"From the first slip to the last",
+		`href="/stats"`,
+		"2017",
+		"2026",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stats page does not contain %q", want)
+		}
+	}
+	if !strings.Contains(body, ">78<") {
+		t.Error("stats page does not show the seeded entry count of 78")
+	}
+	if strings.Contains(body, "The ledger is still blank") {
+		t.Error("stats page shows the empty state for a seeded ledger")
+	}
+}
+
+func TestStatsPageEmptyLedger(t *testing.T) {
+	d := buildStatsPage(store.Stats{}, config.Umami{}, time.Date(2026, time.November, 8, 0, 0, 0, 0, time.UTC))
+	if !d.Empty {
+		t.Fatal("empty store.Stats should produce the empty state")
+	}
+	if len(d.Years) != 0 || len(d.Persons) != 0 {
+		t.Fatalf("empty ledger grew bars: %d years, %d persons", len(d.Years), len(d.Persons))
+	}
+	if d.PhotoPct != 0 || d.SpanText != "" {
+		t.Fatalf("empty ledger has derived figures: pct=%d span=%q", d.PhotoPct, d.SpanText)
+	}
+}
+
+func TestStatsYearBarsFillGaps(t *testing.T) {
+	bars := buildYearBars([]store.YearCount{{Year: 2019, Count: 2}, {Year: 2021, Count: 1}}, 2026)
+	if len(bars) != 3 {
+		t.Fatalf("bars = %d, want a bar for 2019, 2020 and 2021", len(bars))
+	}
+	if bars[1].Year != 2020 || bars[1].Count != 0 || bars[1].Height != 0 {
+		t.Fatalf("gap year = %+v, want an empty 2020 bar", bars[1])
+	}
+	if bars[0].Height != 100 || bars[2].Height != 50 {
+		t.Fatalf("heights = %d/%d, want 100/50", bars[0].Height, bars[2].Height)
+	}
+}
+
+func TestHumanSpan(t *testing.T) {
+	first := time.Date(2017, time.October, 2, 0, 0, 0, 0, time.UTC)
+	last := time.Date(2026, time.November, 2, 0, 0, 0, 0, time.UTC)
+	if got := humanSpan(first, last); got != "9 years and 1 month" {
+		t.Fatalf("humanSpan = %q", got)
 	}
 }
 

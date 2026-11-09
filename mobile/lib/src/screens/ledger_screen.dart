@@ -234,10 +234,7 @@ class _LedgerScreenState extends ConsumerState<LedgerScreen> {
     final selected = state.person.toLowerCase();
     if (selected.isNotEmpty &&
         !persons.any((person) => person.person.toLowerCase() == selected)) {
-      persons.insert(
-        0,
-        PersonCount(person: state.person, count: state.total),
-      );
+      persons.insert(0, PersonCount(person: state.person, count: state.total));
     }
     persons.sort(
       (a, b) => a.person.toLowerCase().compareTo(b.person.toLowerCase()),
@@ -274,8 +271,7 @@ class _LedgerScreenState extends ConsumerState<LedgerScreen> {
     }
 
     final recent =
-        ref.watch(recentEntriesProvider(state.person)).value ??
-        const <Entry>[];
+        ref.watch(recentEntriesProvider(state.person)).value ?? const <Entry>[];
     final showRecent = recent.isNotEmpty && state.query.isEmpty;
     final offset = showRecent ? 1 : 0;
 
@@ -296,8 +292,7 @@ class _LedgerScreenState extends ConsumerState<LedgerScreen> {
               controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(22, 4, 22, 96),
-              itemCount:
-                  offset + state.items.length + (state.hasMore ? 1 : 0),
+              itemCount: offset + state.items.length + (state.hasMore ? 1 : 0),
               separatorBuilder: (_, _) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 if (showRecent && index == 0) {
@@ -355,7 +350,8 @@ class _LedgerScreenState extends ConsumerState<LedgerScreen> {
     if (query.isNotEmpty) {
       return EmptyState(
         title: 'No misspellings match',
-        message: 'Try a shorter fragment, or clear the search to see every entry.',
+        message:
+            'Try a shorter fragment, or clear the search to see every entry.',
         icon: Icons.search_off,
         actionLabel: 'Clear',
         onAction: _clearQuery,
@@ -388,7 +384,8 @@ class _StatsStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    String figure(int value) => loading && value == 0 ? '—' : intlNumber(value);
+    String figure(int value) =>
+        loading && value == 0 ? '—' : formatCount(value);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
@@ -416,16 +413,6 @@ class _StatsStrip extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  static String intlNumber(int value) {
-    final digits = value.toString();
-    final buffer = StringBuffer();
-    for (var i = 0; i < digits.length; i++) {
-      if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(',');
-      buffer.write(digits[i]);
-    }
-    return buffer.toString();
   }
 }
 

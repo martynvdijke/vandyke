@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,7 @@ func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami,
 // Register wires the UI routes into mux.
 func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", w.handleIndex)
+	mux.HandleFunc("GET /stats", w.handleStats)
 	mux.HandleFunc("GET /entries", w.handleLedger)
 	mux.HandleFunc("GET /e/{id}", w.handlePermalink)
 	mux.HandleFunc("POST /entries", w.handleCreate)
@@ -134,6 +136,39 @@ type pageLink struct {
 	URL    string
 	Active bool
 	Gap    bool
+}
+
+// statsPageData is the view model for the /stats page. Ratios and bar heights
+// are computed here so the template only has to place numbers.
+type statsPageData struct {
+	Umami     config.Umami
+	Total     int
+	Unique    int
+	Last30d   int
+	WithPhoto int
+	PhotoPct  int
+	First     *time.Time
+	Last      *time.Time
+	SpanYears int
+	SpanText  string
+	PerYear   int
+	Years     []yearBar
+	Persons   []personBar
+	Empty     bool
+	Year      int
+}
+
+type yearBar struct {
+	Year    int
+	Count   int
+	Height  int
+	Current bool
+}
+
+type personBar struct {
+	Person string
+	Count  int
+	Width  int
 }
 
 type permalinkData struct {
@@ -227,6 +262,17 @@ func (w *Web) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.render(rw, http.StatusOK, "base", data)
+}
+
+// handleStats renders the full statistics page. It reads the ledger summary
+// once and renders everything server-side.
+func (w *Web) handleStats(rw http.ResponseWriter, r *http.Request) {
+	stats, err := w.store.Stats(r.Context())
+	if err != nil {
+		w.renderInternalError(rw, err)
+		return
+	}
+	w.render(rw, http.StatusOK, "stats", buildStatsPage(stats, w.umami(), time.Now()))
 }
 
 func (w *Web) handleLedger(rw http.ResponseWriter, r *http.Request) {
@@ -574,6 +620,167 @@ func buildPageLinks(current, total int, href func(int) string) []pageLink {
 		add(total)
 	}
 	return links
+}
+
+// buildStatsPage turns a store.Stats snapshot into template-ready figures.
+// Nil slices in Stats (an empty ledger) yield no bars.
+func buildStatsPage(stats store.Stats, umami config.Umami, now time.Time) statsPageData {
+	d := statsPageData{
+		Umami:     umami,
+		Total:     stats.Total,
+		Unique:    stats.UniqueWords,
+		Last30d:   stats.EntriesLast30d,
+		WithPhoto: stats.WithPhoto,
+		First:     stats.FirstEntryAt,
+		Last:      stats.LastEntryAt,
+		Empty:     stats.Total == 0,
+		Year:      now.Year(),
+	}
+	if d.Total > 0 {
+		d.PhotoPct = (d.WithPhoto*100 + d.Total/2) / d.Total
+	}
+	if stats.FirstEntryAt != nil && stats.LastEntryAt != nil {
+		d.SpanYears = stats.LastEntryAt.Year() - stats.FirstEntryAt.Year() + 1
+		if d.SpanYears < 1 {
+			d.SpanYears = 1
+		}
+		d.SpanText = humanSpan(*stats.FirstEntryAt, *stats.LastEntryAt)
+		d.PerYear = (d.Total + d.SpanYears/2) / d.SpanYears
+	}
+	d.Years = buildYearBars(stats.ByYear, now.Year())
+	d.Persons = buildPersonBars(stats.TopPersons)
+	return d
+}
+
+// buildYearBars fills the gaps between the first and last year so the chart
+// reads as a timeline instead of a list. A single value scales the bars.
+func buildYearBars(counts []store.YearCount, current int) []yearBar {
+	if len(counts) == 0 {
+		return nil
+	}
+	byYear := make(map[int]int, len(counts))
+	firstYear, lastYear := 0, 0
+	for _, c := range counts {
+		if c.Year < 1000 || c.Year > 9999 {
+			continue
+		}
+		byYear[c.Year] += c.Count
+		if firstYear == 0 || c.Year < firstYear {
+			firstYear = c.Year
+		}
+		if c.Year > lastYear {
+			lastYear = c.Year
+		}
+	}
+	if firstYear == 0 {
+		return nil
+	}
+
+	years := make([]int, 0, lastYear-firstYear+1)
+	// Never draw more than a readable wall of bars; fall back to only the
+	// years that actually hold entries.
+	if lastYear-firstYear <= 40 {
+		for y := firstYear; y <= lastYear; y++ {
+			years = append(years, y)
+		}
+	} else {
+		for y := range byYear {
+			years = append(years, y)
+		}
+		sort.Ints(years)
+	}
+
+	peak := 0
+	for _, y := range years {
+		if n := byYear[y]; n > peak {
+			peak = n
+		}
+	}
+
+	bars := make([]yearBar, 0, len(years))
+	for _, y := range years {
+		count := byYear[y]
+		height := 0
+		if peak > 0 && count > 0 {
+			height = (count*100 + peak/2) / peak
+			if height < 5 {
+				height = 5
+			}
+		}
+		bars = append(bars, yearBar{Year: y, Count: count, Height: height, Current: y == current})
+	}
+	return bars
+}
+
+// buildPersonBars scales each name against the most frequent one.
+func buildPersonBars(persons []store.PersonCount) []personBar {
+	peak := 0
+	for _, p := range persons {
+		if p.Count > peak {
+			peak = p.Count
+		}
+	}
+	bars := make([]personBar, 0, len(persons))
+	for _, p := range persons {
+		if strings.TrimSpace(p.Person) == "" {
+			continue
+		}
+		width := 0
+		if peak > 0 && p.Count > 0 {
+			width = (p.Count*100 + peak/2) / peak
+			if width < 4 {
+				width = 4
+			}
+		}
+		bars = append(bars, personBar{Person: p.Person, Count: p.Count, Width: width})
+	}
+	return bars
+}
+
+// humanSpan describes the distance between two dates in plain words.
+func humanSpan(first, last time.Time) string {
+	if last.Before(first) {
+		first, last = last, first
+	}
+	months := (last.Year()-first.Year())*12 + int(last.Month()) - int(first.Month())
+	if last.Day() < first.Day() {
+		months--
+	}
+	if months < 1 {
+		days := int(last.Sub(first).Hours() / 24)
+		switch {
+		case days <= 0:
+			return "a single day"
+		case days == 1:
+			return "1 day"
+		case days < 14:
+			return fmt.Sprintf("%d days", days)
+		case days < 60:
+			return fmt.Sprintf("%d weeks", days/7)
+		default:
+			return "about a month"
+		}
+	}
+	years, rest := months/12, months%12
+	switch {
+	case years == 0:
+		if months == 1 {
+			return "1 month"
+		}
+		return fmt.Sprintf("%d months", months)
+	case years == 1 && rest == 0:
+		return "1 year"
+	case rest == 0:
+		return fmt.Sprintf("%d years", years)
+	case years == 1 && rest == 1:
+		return "1 year and 1 month"
+	case years == 1:
+		return fmt.Sprintf("1 year and %d months", rest)
+	case rest == 1:
+		return fmt.Sprintf("%d years and 1 month", years)
+	default:
+		return fmt.Sprintf("%d years and %d months", years, rest)
+	}
 }
 
 func (w *Web) renderFormError(rw http.ResponseWriter, message string) {
