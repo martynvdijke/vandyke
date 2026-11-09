@@ -1,3 +1,10 @@
+## [1.9.1](https://github.com/martynvdijke/vandyke/compare/v1.9.0...v1.9.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **deps:** update all non-major dependencies ([#31](https://github.com/martynvdijke/vandyke/issues/31)) ([b2de047](https://github.com/martynvdijke/vandyke/commit/b2de04714be504f9973b3b63caacfbd33d09a426))
+
 # [1.9.0](https://github.com/martynvdijke/vandyke/compare/v1.8.0...v1.9.0) (2026-11-09)
 
 
