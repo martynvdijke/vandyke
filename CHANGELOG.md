@@ -1,3 +1,15 @@
+# [1.9.0](https://github.com/martynvdijke/vandyke/compare/v1.8.0...v1.9.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **lint:** check the row closers in the stats aggregates ([f517c3f](https://github.com/martynvdijke/vandyke/commit/f517c3f8a58a5df34fa7cd5433d24b61774e2306))
+
+
+### Features
+
+* **stats:** count the ledger on the web and in the app ([581e67d](https://github.com/martynvdijke/vandyke/commit/581e67d642f72a8a46300f9f80b7bc160a17674c))
+
 # [1.8.0](https://github.com/martynvdijke/vandyke/compare/v1.7.0...v1.8.0) (2026-11-08)
 
 
