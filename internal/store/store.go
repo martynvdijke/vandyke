@@ -863,7 +863,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	if err != nil {
 		return Stats{}, fmt.Errorf("query entries by year: %w", err)
 	}
-	defer yearRows.Close()
+	defer func() { _ = yearRows.Close() }()
 	for yearRows.Next() {
 		var yc YearCount
 		if err := yearRows.Scan(&yc.Year, &yc.Count); err != nil {
@@ -884,7 +884,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	if err != nil {
 		return Stats{}, fmt.Errorf("query top persons: %w", err)
 	}
-	defer personRows.Close()
+	defer func() { _ = personRows.Close() }()
 	for personRows.Next() {
 		var pc PersonCount
 		if err := personRows.Scan(&pc.Person, &pc.Count); err != nil {
