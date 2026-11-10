@@ -6,7 +6,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +14,6 @@ import (
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/store"
 )
-
-var sessionRefPattern = regexp.MustCompile(`<code>([0-9a-f]{32})</code>`)
 
 func testConfig() config.Config {
 	return config.Config{AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100}

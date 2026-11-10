@@ -1233,7 +1233,7 @@ func (s *Store) ListAdmins(ctx context.Context) ([]Admin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list admins: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var admins []Admin
 	for rows.Next() {
 		admin, err := scanAdmin(rows)
@@ -1620,7 +1620,7 @@ func (s *Store) ListSessionsForAdmin(ctx context.Context, adminID int64, current
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var sessions []SessionView
 	for rows.Next() {
 		var (
@@ -1772,7 +1772,7 @@ func (s *Store) ListAudit(ctx context.Context, filter AuditFilter) (AuditPage, e
 	if err != nil {
 		return AuditPage{}, fmt.Errorf("list audit: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := AuditPage{Total: total, Page: page, Pages: pages, PerPage: perPage}
 	for rows.Next() {
