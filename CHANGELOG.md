@@ -1,3 +1,5 @@
+## [1.10.2](https://github.com/martynvdijke/vandyke/compare/v1.10.1...v1.10.2) (2026-11-10)
+
 ## [1.10.1](https://github.com/martynvdijke/vandyke/compare/v1.10.0...v1.10.1) (2026-11-10)
 
 
