@@ -2,7 +2,11 @@ package admin
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
@@ -33,7 +38,7 @@ func newAdminTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *htt
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	stg, err := settings.New(t.Context(), st, cfg.Umami)
+	stg, err := settings.New(t.Context(), st, cfg.Umami, cfg.Webhook)
 	if err != nil {
 		t.Fatalf("settings.New: %v", err)
 	}
@@ -42,7 +47,7 @@ func newAdminTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *htt
 	if err != nil {
 		t.Fatalf("admin.New: %v", err)
 	}
-	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, false, "", logger)
+	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, stg.CurrentWebhook, false, "", logger)
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -348,7 +353,7 @@ func TestSetupPageOffersOIDCWhenConfigured(t *testing.T) {
 	stub := func(...any) string { return "" }
 	funcs := template.FuncMap{
 		"entryNo": stub, "inc": stub, "dec": stub,
-		"formatDate": stub, "formatDateTime": stub,
+		"formatDate": stub, "formatDateTime": stub, "formatDateTimeP": stub,
 	}
 	tmpl, err := template.New("root").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
@@ -372,4 +377,416 @@ func TestSetupPageOffersOIDCWhenConfigured(t *testing.T) {
 
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
+}
+
+func TestAdminTrashRestorePurgeAndCap(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	first, err := st.CreateEntry(t.Context(), "trashword", "trash meaning", "Ada", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry first: %v", err)
+	}
+	second, err := st.CreateEntry(t.Context(), "secondtrash", "second meaning", "", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry second: %v", err)
+	}
+
+	// The admin bulk delete now soft-deletes.
+	resp := postForm(t, client, srv.URL+"/admin/entries/delete", url.Values{
+		"csrf": {csrf}, "ids": {strconv.FormatInt(first.ID, 10)},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("delete status = %d, want 303", resp.StatusCode)
+	}
+	if _, err := st.GetEntry(t.Context(), first.ID); err == nil {
+		t.Fatal("soft-deleted entry still visible to the public read path")
+	}
+	trashed, err := st.GetEntryIncludingDeleted(t.Context(), first.ID)
+	if err != nil || trashed.DeletedAt == nil {
+		t.Fatalf("entry not in trash after delete: %+v (%v)", trashed, err)
+	}
+
+	resp, body := get(t, client, srv.URL+"/admin/trash")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("trash page status = %d", resp.StatusCode)
+	}
+	for _, want := range []string{"trashword", "trash meaning", "deleted", "Restore selected", "Purge selected"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("trash page missing %q", want)
+		}
+	}
+
+	// Missing CSRF is rejected before any restore happens.
+	resp = postForm(t, client, srv.URL+"/admin/trash/restore", url.Values{
+		"ids": {strconv.FormatInt(first.ID, 10)},
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("restore without CSRF = %d, want 403", resp.StatusCode)
+	}
+
+	resp = postForm(t, client, srv.URL+"/admin/trash/restore", url.Values{
+		"csrf": {csrf}, "ids": {strconv.FormatInt(first.ID, 10)},
+	})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/trash?restored=1" {
+		t.Fatalf("restore = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	restored, err := st.GetEntry(t.Context(), first.ID)
+	if err != nil || restored.DeletedAt != nil {
+		t.Fatalf("entry not restored: %+v (%v)", restored, err)
+	}
+
+	resp, body = get(t, client, srv.URL+"/admin/trash")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "The trash is empty") {
+		t.Fatalf("trash page after restore = %d, empty state missing", resp.StatusCode)
+	}
+
+	// Trash both again, then exercise the 100-id cap.
+	if _, err := st.SoftDeleteEntries(t.Context(), []int64{first.ID, second.ID}); err != nil {
+		t.Fatalf("SoftDeleteEntries: %v", err)
+	}
+	tooMany := make([]string, 0, 101)
+	for i := 1; i <= 101; i++ {
+		tooMany = append(tooMany, strconv.Itoa(i))
+	}
+	resp = postForm(t, client, srv.URL+"/admin/trash/purge", url.Values{
+		"csrf": {csrf}, "ids": tooMany,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("purge over cap = %d, want 400", resp.StatusCode)
+	}
+	if _, err := st.GetEntryIncludingDeleted(t.Context(), first.ID); err != nil {
+		t.Fatalf("over-cap purge deleted rows: %v", err)
+	}
+
+	resp = postForm(t, client, srv.URL+"/admin/trash/purge", url.Values{
+		"csrf": {csrf},
+		"ids": []string{
+			strconv.FormatInt(first.ID, 10),
+			strconv.FormatInt(second.ID, 10),
+		},
+	})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/trash?purged=2" {
+		t.Fatalf("purge = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		if _, err := st.GetEntryIncludingDeleted(t.Context(), id); err == nil {
+			t.Fatalf("entry %d survived purge", id)
+		}
+	}
+}
+
+func TestAdminCanInspectTrashedEntryAndPhoto(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	setupAdmin(t, srv, client)
+
+	photo, err := store.NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "", "", "", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	if _, err := st.SoftDeleteEntries(t.Context(), []int64{entry.ID}); err != nil {
+		t.Fatalf("SoftDeleteEntries: %v", err)
+	}
+
+	resp, body := get(t, client, srv.URL+"/admin/entries/"+itoa(entry.ID)+"/edit")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("trashed edit page status = %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "This entry is in the trash") || !strings.Contains(body, "Restore entry") {
+		t.Fatal("edit page lacks the trash banner or restore control")
+	}
+
+	resp, _ = get(t, client, srv.URL+"/admin/entries/"+itoa(entry.ID)+"/photo/original")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("trashed original photo status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestAdminDocumentsExposeStructureManifestAndFormAria(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	setupAdmin(t, srv, client)
+
+	mainPattern := regexp.MustCompile(`<main\b`)
+	anon := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	pages := []struct {
+		path   string
+		client *http.Client
+	}{
+		{"/admin/login", anon},
+		{"/admin", client},
+	}
+	for _, page := range pages {
+		resp, body := get(t, page.client, srv.URL+page.path)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", page.path, resp.StatusCode)
+		}
+		if got := len(mainPattern.FindAllString(body, -1)); got != 1 {
+			t.Errorf("%s has %d main elements, want 1", page.path, got)
+		}
+		if !strings.Contains(body, `id="content"`) {
+			t.Errorf("%s main is missing id=content", page.path)
+		}
+		skip := strings.Index(body, `class="skip-link"`)
+		main := strings.Index(body, "<main")
+		if skip < 0 || main < 0 || skip > main {
+			t.Errorf("%s skip link does not precede main", page.path)
+		}
+		if !strings.Contains(body, `rel="manifest" href="/site.webmanifest"`) {
+			t.Errorf("%s is missing the manifest link", page.path)
+		}
+	}
+
+	// A failed sign-in is announced through a role=alert region the form names.
+	resp, err := anon.PostForm(srv.URL+"/admin/login", url.Values{
+		"username": {"owner"}, "password": {"definitely wrong"},
+	})
+	if err != nil {
+		t.Fatalf("failed login POST: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read login body: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("failed login status = %d, want 401", resp.StatusCode)
+	}
+	for _, want := range []string{`id="login-error"`, `role="alert"`, `aria-describedby="login-error"`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("failed login page is missing %q", want)
+		}
+	}
+
+	// Every hinted input on the edit form names its hint, and the remove-photo
+	// checkbox keeps its visible label.
+	photo, err := store.NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "hints", "labels", "Ada", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	resp, editBody := get(t, client, srv.URL+"/admin/entries/"+itoa(entry.ID)+"/edit")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit status = %d, want 200", resp.StatusCode)
+	}
+	for _, hint := range []string{"edit-word-hint", "edit-meaning-hint", "edit-person-hint", "edit-date-hint", "edit-photo-hint"} {
+		if !strings.Contains(editBody, `id="`+hint+`"`) {
+			t.Errorf("edit form has no hint element #%s", hint)
+		}
+		if !strings.Contains(editBody, `aria-describedby="`+hint+`"`) {
+			t.Errorf("edit form input does not reference #%s", hint)
+		}
+	}
+	if !strings.Contains(editBody, `<input type="checkbox" name="remove_photo"`) || !strings.Contains(editBody, "Remove this photo") {
+		t.Error("remove-photo checkbox lost its visible label")
+	}
+}
+
+func TestAdminSearchRebuild(t *testing.T) {
+	srv, client, _ := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	resp := postForm(t, client, srv.URL+"/entries", url.Values{
+		"word": {"rebuildprobe"}, "meaning": {"index me"}, "person": {"Rebuild Person"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add entry status = %d", resp.StatusCode)
+	}
+
+	_, settings := get(t, client, srv.URL+"/admin/settings")
+	if !strings.Contains(settings, `action="/admin/search/rebuild"`) {
+		t.Fatal("settings page has no rebuild form")
+	}
+
+	// Without a CSRF token the action is rejected before touching the index.
+	resp = postForm(t, client, srv.URL+"/admin/search/rebuild", url.Values{})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("missing csrf status = %d, want 403", resp.StatusCode)
+	}
+
+	// Without a session the request is redirected to the login page.
+	anonymous := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp = postForm(t, anonymous, srv.URL+"/admin/search/rebuild", url.Values{"csrf": {"anything"}})
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/admin/login") {
+		t.Fatalf("unauthenticated rebuild = %d %q, want login redirect", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	resp = postForm(t, client, srv.URL+"/admin/search/rebuild", url.Values{"csrf": {csrf}})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/settings?rebuilt=1" {
+		t.Fatalf("rebuild = %d %q, want settings confirmation", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	_, confirmed := get(t, client, srv.URL+"/admin/settings?rebuilt=1")
+	if !strings.Contains(confirmed, "Search index rebuilt") {
+		t.Fatal("settings page does not confirm the rebuild")
+	}
+
+	// The rebuilt index still serves the person field to the public search.
+	_, public := get(t, client, srv.URL+"/entries?q=Rebuild+Person")
+	// Highlighting splits "rebuildprobe" around the matched term, so assert on
+	// the unmarked correction text instead.
+	if !strings.Contains(public, "index me") {
+		t.Fatal("rebuilt index lost the person entry")
+	}
+}
+
+func postFormRead(t *testing.T, client *http.Client, u string, values url.Values) (int, string) {
+	t.Helper()
+	resp, err := client.PostForm(u, values)
+	if err != nil {
+		t.Fatalf("POST %s: %v", u, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, string(body)
+}
+
+func TestAdminWebhookSettingsAndTestFire(t *testing.T) {
+	srv, client, _ := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	// Missing CSRF is rejected before any request is made.
+	if status, _ := postFormRead(t, client, srv.URL+"/admin/settings/webhook/test", url.Values{}); status != http.StatusForbidden {
+		t.Fatalf("missing csrf status = %d, want 403", status)
+	}
+
+	// Without a session the action redirects to the login page.
+	anonymous := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := anonymous.PostForm(srv.URL+"/admin/settings/webhook/test", url.Values{"csrf": {"anything"}})
+	if err != nil {
+		t.Fatalf("anonymous POST: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/admin/login") {
+		t.Fatalf("unauthenticated test-fire = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// No URL configured: a clear message and no outbound request.
+	status, body := postFormRead(t, client, srv.URL+"/admin/settings/webhook/test", url.Values{"csrf": {csrf}})
+	if status != http.StatusOK {
+		t.Fatalf("no-url test-fire status = %d", status)
+	}
+	if !strings.Contains(body, "No webhook configured") {
+		t.Fatalf("no-url test-fire body missing the message: %.400s", body)
+	}
+
+	type delivery struct {
+		body      []byte
+		signature string
+	}
+	deliveries := make(chan delivery, 1)
+	receiver := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		deliveries <- delivery{body: payload, signature: r.Header.Get("X-VanDyke-Signature")}
+		rw.WriteHeader(http.StatusAccepted)
+	}))
+	defer receiver.Close()
+
+	status, _ = postFormRead(t, client, srv.URL+"/admin/settings", url.Values{
+		"csrf":           {csrf},
+		"settings_form":  {"webhook"},
+		"webhook_url":    {receiver.URL},
+		"webhook_secret": {"supersecret"},
+	})
+	if status != http.StatusSeeOther {
+		t.Fatalf("save webhook status = %d", status)
+	}
+
+	_, settings := get(t, client, srv.URL+"/admin/settings")
+	if strings.Contains(settings, "supersecret") {
+		t.Fatal("stored webhook secret was rendered back into the page")
+	}
+	if !strings.Contains(settings, "A secret is configured") {
+		t.Fatal("settings page does not report the configured secret")
+	}
+	if !strings.Contains(settings, receiver.URL) {
+		t.Fatal("settings page does not show the effective webhook URL")
+	}
+
+	status, body = postFormRead(t, client, srv.URL+"/admin/settings/webhook/test", url.Values{"csrf": {csrf}})
+	if status != http.StatusOK {
+		t.Fatalf("test-fire status = %d", status)
+	}
+	if !strings.Contains(body, "HTTP 202") {
+		t.Fatalf("test-fire did not report the receiver status: %.400s", body)
+	}
+
+	select {
+	case got := <-deliveries:
+		mac := hmac.New(sha256.New, []byte("supersecret"))
+		_, _ = mac.Write(got.body)
+		want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		if got.signature != want {
+			t.Fatalf("test-fire signature = %q, want %q", got.signature, want)
+		}
+		var payload struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(got.body, &payload); err != nil {
+			t.Fatalf("decode test-fire payload: %v", err)
+		}
+		if payload.Event != "entry.created" {
+			t.Fatalf("test-fire event = %q", payload.Event)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("test-fire made no request")
+	}
+
+	// A failing receiver is reported as its HTTP status.
+	failing := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failing.Close()
+	if status, _ := postFormRead(t, client, srv.URL+"/admin/settings", url.Values{
+		"csrf":          {csrf},
+		"settings_form": {"webhook"},
+		"webhook_url":   {failing.URL},
+	}); status != http.StatusSeeOther {
+		t.Fatalf("save failing webhook status = %d", status)
+	}
+	status, body = postFormRead(t, client, srv.URL+"/admin/settings/webhook/test", url.Values{"csrf": {csrf}})
+	if status != http.StatusOK || !strings.Contains(body, "HTTP 500") {
+		t.Fatalf("failing test-fire = %d, body %.400s", status, body)
+	}
+
+	// Clearing removes the stored secret without touching the URL.
+	if status, _ := postFormRead(t, client, srv.URL+"/admin/settings", url.Values{
+		"csrf":                 {csrf},
+		"settings_form":        {"webhook"},
+		"webhook_url":          {failing.URL},
+		"webhook_clear_secret": {"1"},
+	}); status != http.StatusSeeOther {
+		t.Fatalf("clear secret status = %d", status)
+	}
+	_, cleared := get(t, client, srv.URL+"/admin/settings")
+	if strings.Contains(cleared, "A secret is configured") {
+		t.Fatal("secret still reported as configured after clearing")
+	}
+	if !strings.Contains(cleared, failing.URL) {
+		t.Fatal("clearing the secret removed the URL")
+	}
 }

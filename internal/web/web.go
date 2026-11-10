@@ -4,8 +4,10 @@ package web
 import (
 	"embed"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -20,8 +22,10 @@ import (
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
+	"vandyke.thor.edu/vandyke/internal/searchquery"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/upload"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 //go:embed templates/*.html
@@ -37,13 +41,14 @@ type Web struct {
 	trustProxy    bool
 	publicBaseURL string
 	umami         func() config.Umami
+	hooks         *webhook.Dispatcher
 	logger        *slog.Logger
 	tmpl          *template.Template
 	assets        http.Handler
 }
 
 // New parses templates and prepares the static asset handler.
-func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, trustProxy bool, publicBaseURL string, logger *slog.Logger) (*Web, error) {
+func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, webhookConfig func() config.Webhook, trustProxy bool, publicBaseURL string, logger *slog.Logger) (*Web, error) {
 	tmpl, err := template.New("vandyke").Funcs(template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			if t.IsZero() {
@@ -76,6 +81,7 @@ func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami,
 		trustProxy:    trustProxy,
 		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
 		umami:         umami,
+		hooks:         webhook.New(webhookConfig, logger),
 		logger:        logger,
 		tmpl:          tmpl,
 		assets:        http.FileServer(http.FS(sub)),
@@ -88,28 +94,35 @@ func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /stats", w.handleStats)
 	mux.HandleFunc("GET /entries", w.handleLedger)
 	mux.HandleFunc("GET /e/{id}", w.handlePermalink)
+	mux.HandleFunc("GET /feed.xml", w.handleFeed)
 	mux.HandleFunc("POST /entries", w.handleCreate)
+	mux.HandleFunc("GET /robots.txt", w.handleRobots)
+	mux.HandleFunc("GET /sitemap.xml", w.handleSitemap)
+	mux.HandleFunc("GET /site.webmanifest", w.handleManifest)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheable(w.assets)))
 }
 
 type pageData struct {
-	Umami       config.Umami
-	Stats       store.Stats
-	SpanYears   int
-	Ledger      ledgerData
-	Recent      []store.Entry
-	Added       bool
-	ShowAdd     bool
-	ShowInfo    bool
-	FormError   string
-	FormWord    string
-	FormMeaning string
-	FormPerson  string
-	Year        int
+	Umami         config.Umami
+	Stats         store.Stats
+	SpanYears     int
+	Ledger        ledgerData
+	Recent        []store.Entry
+	Title         string
+	Description   string
+	ToolbarAction string
+	Added         bool
+	ShowAdd       bool
+	ShowInfo      bool
+	FormError     string
+	FormWord      string
+	FormMeaning   string
+	FormPerson    string
+	Year          int
 }
 
 type ledgerData struct {
-	Entries   []store.Entry
+	Entries   []ledgerRow
 	Persons   []string
 	Query     ledgerQuery
 	Years     []int
@@ -118,6 +131,14 @@ type ledgerData struct {
 	From      int
 	To        int
 	PageLinks []pageLink
+}
+
+// ledgerRow is one rendered entry. The plain store fields stay untouched; the
+// HTML variants carry the source text escaped and only our own <mark> tags.
+type ledgerRow struct {
+	store.Entry
+	WordHTML    template.HTML
+	MeaningHTML template.HTML
 }
 
 type ledgerQuery struct {
@@ -129,6 +150,9 @@ type ledgerQuery struct {
 	PerPage   int
 	PhotoOnly bool
 	Year      int
+	From      string
+	To        string
+	Highlight bool
 }
 
 type pageLink struct {
@@ -156,6 +180,16 @@ type statsPageData struct {
 	Persons   []personBar
 	Empty     bool
 	Year      int
+
+	// Ledger and the dialog fields let the shared masthead's add/info triggers
+	// resolve to dialogs rendered on this page.
+	Ledger      ledgerData
+	ShowAdd     bool
+	ShowInfo    bool
+	FormError   string
+	FormWord    string
+	FormMeaning string
+	FormPerson  string
 }
 
 type yearBar struct {
@@ -202,6 +236,15 @@ func (q ledgerQuery) values() url.Values {
 	}
 	if q.Year > 0 {
 		v.Set("year", strconv.Itoa(q.Year))
+	}
+	if q.From != "" {
+		v.Set("from", q.From)
+	}
+	if q.To != "" {
+		v.Set("to", q.To)
+	}
+	if !q.Highlight {
+		v.Set("highlight", "0")
 	}
 	return v
 }
@@ -286,7 +329,22 @@ func (w *Web) handleLedger(rw http.ResponseWriter, r *http.Request) {
 		w.renderInternalError(rw, err)
 		return
 	}
-	w.render(rw, http.StatusOK, "ledger", pageData{Umami: w.umami(), Ledger: ledger, Recent: recent})
+	data := pageData{
+		Umami:         w.umami(),
+		Ledger:        ledger,
+		Recent:        recent,
+		Year:          time.Now().Year(),
+		ToolbarAction: "/entries",
+		Title:         "The ledger · vanDyke",
+		Description:   "Browse, search and sort every misspelling in the LANCo ledger, one correction at a time.",
+	}
+	// HTMX swaps the bare ledger fragment; a plain navigation or a crawler gets
+	// a complete document so sort, pager and clear-search links keep working.
+	if r.Header.Get("HX-Request") != "" {
+		w.render(rw, http.StatusOK, "ledger", data)
+		return
+	}
+	w.render(rw, http.StatusOK, "ledger-page", data)
 }
 
 func (w *Web) handlePermalink(rw http.ResponseWriter, r *http.Request) {
@@ -328,27 +386,88 @@ func (w *Web) renderNotFound(rw http.ResponseWriter) {
 	})
 }
 
+// handleRobots serves crawler directives and points at the absolute sitemap.
+func (w *Web) handleRobots(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	rw.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = fmt.Fprintf(rw, "User-agent: *\nDisallow: /admin\n\nSitemap: %s\n", w.absoluteURL(r, "/sitemap.xml"))
+}
+
+type sitemapURL struct {
+	Loc string `xml:"loc"`
+}
+
+type sitemapSet struct {
+	XMLName xml.Name     `xml:"urlset"`
+	Xmlns   string       `xml:"xmlns,attr"`
+	URLs    []sitemapURL `xml:"url"`
+}
+
+// handleSitemap lists the home page, statistics and every live permalink as
+// absolute URLs built by the same helper as canonical links.
+func (w *Web) handleSitemap(rw http.ResponseWriter, r *http.Request) {
+	ids, err := w.store.AllEntryIDs(r.Context())
+	if err != nil {
+		w.renderInternalError(rw, err)
+		return
+	}
+	set := sitemapSet{
+		Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9",
+		URLs: []sitemapURL{
+			{Loc: w.absoluteURL(r, "/")},
+			{Loc: w.absoluteURL(r, "/stats")},
+		},
+	}
+	for _, id := range ids {
+		set.URLs = append(set.URLs, sitemapURL{Loc: w.absoluteURL(r, fmt.Sprintf("/e/%d", id))})
+	}
+	body, err := xml.Marshal(set)
+	if err != nil {
+		w.renderInternalError(rw, err)
+		return
+	}
+	rw.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	rw.Header().Set("Cache-Control", "no-store")
+	_, _ = rw.Write([]byte(xml.Header + string(body) + "\n"))
+}
+
+type manifestIcon struct {
+	Src   string `json:"src"`
+	Sizes string `json:"sizes"`
+	Type  string `json:"type"`
+}
+
+type webManifest struct {
+	Name            string         `json:"name"`
+	ShortName       string         `json:"short_name"`
+	StartURL        string         `json:"start_url"`
+	Display         string         `json:"display"`
+	ThemeColor      string         `json:"theme_color"`
+	BackgroundColor string         `json:"background_color"`
+	Icons           []manifestIcon `json:"icons"`
+}
+
+// handleManifest serves the web app manifest using the existing icon assets.
+func (w *Web) handleManifest(rw http.ResponseWriter, r *http.Request) {
+	manifest := webManifest{
+		Name:            "vanDyke — the LANCo misspelling ledger",
+		ShortName:       "vanDyke",
+		StartURL:        "/",
+		Display:         "standalone",
+		ThemeColor:      "#f4eee1",
+		BackgroundColor: "#f4eee1",
+		Icons: []manifestIcon{
+			{Src: "/static/images/favicon.svg", Sizes: "any", Type: "image/svg+xml"},
+			{Src: "/static/images/apple-touch-icon.png", Sizes: "180x180", Type: "image/png"},
+		},
+	}
+	rw.Header().Set("Content-Type", "application/manifest+json")
+	rw.Header().Set("Cache-Control", "public, max-age=3600")
+	_ = json.NewEncoder(rw).Encode(manifest)
+}
+
 func (w *Web) absoluteURL(r *http.Request, path string) string {
-	if w.publicBaseURL != "" {
-		return w.publicBaseURL + path
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if w.trustProxy {
-		switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))) {
-		case "https":
-			scheme = "https"
-		case "http":
-			scheme = "http"
-		}
-	}
-	host := r.Host
-	if host == "" {
-		host = "localhost"
-	}
-	return scheme + "://" + host + path
+	return httpx.BaseURL(r, w.publicBaseURL, w.trustProxy) + path
 }
 
 func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
@@ -438,6 +557,10 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fire-and-forget: the goroutine returns immediately, so a slow receiver
+	// cannot delay or change this response.
+	w.hooks.Dispatch(webhook.BuildPayload(entry, w.absoluteURL(r, fmt.Sprintf("/e/%d", entry.ID))))
+
 	if !isHTMX {
 		http.Redirect(rw, r, "/?added=1", http.StatusSeeOther)
 		return
@@ -521,22 +644,42 @@ func (w *Web) buildLedger(r *http.Request) (ledgerData, error) {
 	if err != nil {
 		return ledgerData{}, err
 	}
+	query := ledgerQuery{
+		Q:         params.Query,
+		Sort:      params.Sort,
+		Order:     params.Order,
+		Person:    params.Person,
+		Page:      page.Page,
+		PerPage:   page.PerPage,
+		PhotoOnly: params.HasPhoto != nil && *params.HasPhoto,
+		Year:      params.Year,
+		Highlight: highlightEnabled(r),
+	}
+	if !params.From.IsZero() {
+		query.From = params.From.Format("2006-01-02")
+	}
+	if !params.To.IsZero() {
+		query.To = params.To.Format("2006-01-02")
+	}
+
+	parsed := searchquery.Parse(params.Query)
+	rows := make([]ledgerRow, 0, len(page.Entries))
+	for _, entry := range page.Entries {
+		row := ledgerRow{Entry: entry}
+		if query.Highlight {
+			row.WordHTML = markMatches(entry.Word, parsed.Include)
+			row.MeaningHTML = markMatches(entry.Meaning, parsed.Include)
+		}
+		rows = append(rows, row)
+	}
+
 	d := ledgerData{
-		Entries: page.Entries,
+		Entries: rows,
 		Persons: persons,
-		Query: ledgerQuery{
-			Q:         params.Query,
-			Sort:      params.Sort,
-			Order:     params.Order,
-			Person:    params.Person,
-			Page:      page.Page,
-			PerPage:   page.PerPage,
-			PhotoOnly: params.HasPhoto != nil && *params.HasPhoto,
-			Year:      params.Year,
-		},
-		Years: years,
-		Total: page.Total,
-		Pages: page.Pages,
+		Query:   query,
+		Years:   years,
+		Total:   page.Total,
+		Pages:   page.Pages,
 	}
 	if page.Total > 0 && len(page.Entries) > 0 {
 		d.From = (page.Page-1)*page.PerPage + 1
@@ -544,6 +687,78 @@ func (w *Web) buildLedger(r *http.Request) (ledgerData, error) {
 	}
 	d.PageLinks = buildPageLinks(page.Page, page.Pages, d.PageHref)
 	return d, nil
+}
+
+// markMatches escapes text and wraps each case-insensitive occurrence of an
+// included phrase in a <mark> element. Every byte of user text is escaped
+// before it reaches the output, so only our own tags are markup.
+func markMatches(text string, phrases []searchquery.Phrase) template.HTML {
+	if text == "" || len(phrases) == 0 {
+		return template.HTML(html.EscapeString(text))
+	}
+
+	type span struct{ start, end int }
+	src := []rune(text)
+	var spans []span
+	for _, phrase := range phrases {
+		needle := []rune(phrase.Text)
+		if len(needle) == 0 {
+			continue
+		}
+		for i := 0; i+len(needle) <= len(src); {
+			if runesEqualFold(src[i:i+len(needle)], needle) {
+				spans = append(spans, span{i, i + len(needle)})
+				i += len(needle)
+				continue
+			}
+			i++
+		}
+	}
+	if len(spans) == 0 {
+		return template.HTML(html.EscapeString(text))
+	}
+
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	var b strings.Builder
+	last := 0
+	for _, s := range spans {
+		if s.start < last {
+			if s.end > last {
+				last = s.end
+			}
+			continue
+		}
+		b.WriteString(html.EscapeString(string(src[last:s.start])))
+		b.WriteString("<mark>")
+		b.WriteString(html.EscapeString(string(src[s.start:s.end])))
+		b.WriteString("</mark>")
+		last = s.end
+	}
+	b.WriteString(html.EscapeString(string(src[last:])))
+	return template.HTML(b.String())
+}
+
+// runesEqualFold compares two equal-length rune slices case-insensitively.
+func runesEqualFold(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if unicode.ToLower(a[i]) != unicode.ToLower(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// highlightEnabled reports whether the ledger should mark matches. Highlighting
+// is on unless the request explicitly turns it off with highlight=0.
+func highlightEnabled(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.FormValue("highlight"))) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
 }
 
 func parseListParams(r *http.Request) store.ListParams {
@@ -557,7 +772,23 @@ func parseListParams(r *http.Request) store.ListParams {
 		PerPage:  formInt(r, "per_page", store.DefaultPerPage),
 		HasPhoto: formOptionalBool(r, "photo", "filter_photo"),
 		Year:     formInt(r, "year", 0),
+		From:     formDate(r, "from"),
+		To:       formDate(r, "to"),
 	}
+}
+
+// formDate parses an optional YYYY-MM-DD filter. The web page ignores a
+// malformed value, leaving that bound unapplied.
+func formDate(r *http.Request, key string) time.Time {
+	raw := strings.TrimSpace(r.FormValue(key))
+	if raw == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func formOptionalBool(r *http.Request, keys ...string) *bool {
@@ -635,6 +866,7 @@ func buildStatsPage(stats store.Stats, umami config.Umami, now time.Time) statsP
 		Last:      stats.LastEntryAt,
 		Empty:     stats.Total == 0,
 		Year:      now.Year(),
+		Ledger:    ledgerData{Query: ledgerQuery{}},
 	}
 	if d.Total > 0 {
 		d.PhotoPct = (d.WithPhoto*100 + d.Total/2) / d.Total

@@ -20,6 +20,9 @@
 
   function applyTheme(value) {
     document.documentElement.setAttribute("data-theme", value);
+    document.querySelectorAll("[data-theme-toggle]").forEach(function (button) {
+      button.setAttribute("aria-pressed", value === "dark" ? "true" : "false");
+    });
   }
 
   applyTheme(resolvedTheme());
@@ -64,7 +67,8 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    /* theme toggle */
+    /* theme toggle: applyTheme may have run before the buttons were parsed */
+    applyTheme(resolvedTheme());
     document.querySelectorAll("[data-theme-toggle]").forEach(function (button) {
       button.addEventListener("click", function () {
         var next = resolvedTheme() === "dark" ? "light" : "dark";
@@ -80,12 +84,20 @@
     });
 
     /* dialogs */
+    function setTriggersExpanded(dialog, expanded) {
+      document.querySelectorAll("[data-dialog-open]").forEach(function (trigger) {
+        if (trigger.getAttribute("data-dialog-open") === "#" + dialog.id) {
+          trigger.setAttribute("aria-expanded", expanded ? "true" : "false");
+        }
+      });
+    }
     document.querySelectorAll("[data-dialog-open]").forEach(function (trigger) {
       trigger.addEventListener("click", function (event) {
         var target = document.querySelector(trigger.getAttribute("data-dialog-open"));
         if (!target || typeof target.showModal !== "function") return;
         event.preventDefault();
         if (!target.open) target.showModal();
+        setTriggersExpanded(target, true);
         var field = target.querySelector("input[name=word]");
         if (field) {
           window.setTimeout(function () {
@@ -102,6 +114,9 @@
       });
       dialog.addEventListener("click", function (event) {
         if (event.target === dialog) dialog.close();
+      });
+      dialog.addEventListener("close", function () {
+        setTriggersExpanded(dialog, false);
       });
     });
 

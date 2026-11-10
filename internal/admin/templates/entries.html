@@ -52,7 +52,7 @@
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <div class="admin-bulkbar">
       <label class="admin-check"><input type="checkbox" data-select-all> <span>Select all</span></label>
-      <button class="btn btn-danger btn-small" type="submit" data-bulk-delete>Delete selected</button>
+      {{if .Admin.IsOwner}}<button class="btn btn-danger btn-small" type="submit" data-bulk-delete>Delete selected</button>{{end}}
     </div>
     <div class="admin-table" role="table" aria-label="Ledger administration">
       <div class="admin-row admin-row-head" role="row">
@@ -77,7 +77,7 @@
           <time class="admin-col-date" role="cell" datetime="{{$e.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate $e.CreatedAt}}</time>
           <span class="admin-col-actions" role="cell">
             <a class="btn btn-ghost btn-small" href="/admin/entries/{{$e.ID}}/edit">Edit</a>
-            <button class="btn btn-danger btn-small" type="button" data-delete-id="{{$e.ID}}" data-delete-label="{{entryNo $e.ID}}">Delete</button>
+            {{if $.Admin.IsOwner}}<button class="btn btn-danger btn-small" type="button" data-delete-id="{{$e.ID}}" data-delete-label="{{entryNo $e.ID}}">Delete</button>{{end}}
           </span>
         </li>
         {{end}}

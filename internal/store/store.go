@@ -4,6 +4,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"embed"
@@ -19,6 +20,8 @@ import (
 	"time"
 
 	sqlite "modernc.org/sqlite" // CGO-free SQLite driver
+
+	"vandyke.thor.edu/vandyke/internal/searchquery"
 )
 
 //go:embed migrations/*.sql
@@ -43,6 +46,18 @@ var ErrAdminNotFound = errors.New("admin not found")
 
 // ErrSessionNotFound is returned when a session is missing or expired.
 var ErrSessionNotFound = errors.New("session not found")
+
+// ErrLastOwner is returned when an operation would leave no enabled owner.
+var ErrLastOwner = errors.New("cannot remove the last enabled owner")
+
+// Admin roles. Every admin is exactly one of these.
+const (
+	RoleOwner  = "owner"
+	RoleEditor = "editor"
+)
+
+// ValidRole reports whether role is an accepted admin role.
+func ValidRole(role string) bool { return role == RoleOwner || role == RoleEditor }
 
 // sqliteConstraintUnique is SQLITE_CONSTRAINT_UNIQUE.
 const sqliteConstraintUnique = 2067
@@ -71,12 +86,13 @@ const (
 // Entry is one row of the ledger: a misspelling and its correction, optionally
 // accompanied by a photo of the offending text.
 type Entry struct {
-	ID        int64     `json:"id"`
-	Word      string    `json:"word"`
-	Meaning   string    `json:"meaning"`
-	Person    string    `json:"person,omitempty"`
-	PhotoURL  string    `json:"photo_url,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int64      `json:"id"`
+	Word      string     `json:"word"`
+	Meaning   string     `json:"meaning"`
+	Person    string     `json:"person,omitempty"`
+	PhotoURL  string     `json:"photo_url,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 // Photo is image evidence attached to an entry. The original bytes are kept
@@ -163,6 +179,10 @@ type ListParams struct {
 	PerPage  int
 	HasPhoto *bool
 	Year     int
+	// From and To bound created_at inclusively. The zero value leaves that
+	// side of the range open.
+	From time.Time
+	To   time.Time
 }
 
 // Page is a paginated slice of entries.
@@ -397,7 +417,7 @@ func (s *Store) seedIfEmpty(ctx context.Context) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("seed entry id %q: %w", row.Word, err)
 		}
-		if err := indexEntry(ctx, tx, id, row.Word, row.Meaning); err != nil {
+		if err := indexEntry(ctx, tx, id, row.Word, row.Meaning, ""); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -429,7 +449,7 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 		p.Page = 1
 	}
 
-	query := `SELECT e.id, e.word, e.meaning, e.person, e.created_at,
+	query := `SELECT e.id, e.word, e.meaning, e.person, e.created_at, e.deleted_at,
 		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
 		FROM entries e` + where +
 		` ORDER BY ` + sortColumns[p.Sort] + ` ` + strings.ToUpper(p.Order) + `, id ` + strings.ToUpper(p.Order) +
@@ -458,18 +478,27 @@ func (s *Store) ListEntries(ctx context.Context, params ListParams) (Page, error
 }
 
 // ledgerFilter builds the shared WHERE clause for listing and counting entries.
+// Trashed rows are always excluded.
 func ledgerFilter(p ListParams) (string, []any) {
-	var clauses []string
-	args := make([]any, 0, 4)
+	clauses := []string{`e.deleted_at IS NULL`}
+	args := make([]any, 0, 12)
 
-	if p.Query != "" {
-		if match := ftsMatch(p.Query); match != "" {
+	if query := searchquery.Parse(p.Query); !query.Empty() {
+		if match := query.Match(); match != "" {
 			clauses = append(clauses, `e.id IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`)
 			args = append(args, match)
 		} else {
-			pattern := "%" + escapeLike(p.Query) + "%"
-			clauses = append(clauses, `(e.word LIKE ? ESCAPE '\' OR e.meaning LIKE ? ESCAPE '\')`)
-			args = append(args, pattern, pattern)
+			include, exclude := query.LikePatterns()
+			for _, pattern := range include {
+				clauses = append(clauses,
+					`(e.word LIKE ? ESCAPE '\' OR e.meaning LIKE ? ESCAPE '\' OR e.person LIKE ? ESCAPE '\')`)
+				args = append(args, pattern, pattern, pattern)
+			}
+			for _, pattern := range exclude {
+				clauses = append(clauses,
+					`NOT (e.word LIKE ? ESCAPE '\' OR e.meaning LIKE ? ESCAPE '\' OR e.person LIKE ? ESCAPE '\')`)
+				args = append(args, pattern, pattern, pattern)
+			}
 		}
 	}
 	if p.HasPhoto != nil {
@@ -486,6 +515,15 @@ func ledgerFilter(p ListParams) (string, []any) {
 			fmt.Sprintf("%04d-01-01T00:00:00Z", p.Year+1),
 		)
 	}
+	if !p.From.IsZero() {
+		clauses = append(clauses, `e.created_at >= ?`)
+		args = append(args, p.From.UTC().Format("2006-01-02T00:00:00Z"))
+	}
+	if !p.To.IsZero() {
+		// Advances To by one day so the upper boundary date is inclusive.
+		clauses = append(clauses, `e.created_at < ?`)
+		args = append(args, p.To.UTC().AddDate(0, 0, 1).Format("2006-01-02T00:00:00Z"))
+	}
 	if person := strings.TrimSpace(p.Person); person != "" {
 		clauses = append(clauses, `e.person = ? COLLATE NOCASE`)
 		args = append(args, person)
@@ -496,29 +534,11 @@ func ledgerFilter(p ListParams) (string, []any) {
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
-// ftsMatch turns a user query into a safe FTS5 trigram expression. It returns
-// "" when any token is shorter than the trigram minimum, in which case the
-// caller uses the LIKE fallback.
-func ftsMatch(query string) string {
-	fields := strings.Fields(query)
-	if len(fields) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if len([]rune(field)) < 3 {
-			return ""
-		}
-		parts = append(parts, `"`+strings.ReplaceAll(field, `"`, `""`)+`"`)
-	}
-	return strings.Join(parts, " AND ")
-}
-
 // EntryYears returns the distinct years that contain ledger entries, newest first.
 func (s *Store) EntryYears(ctx context.Context) ([]int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT DISTINCT CAST(strftime('%Y', created_at) AS INTEGER) AS year
-		FROM entries ORDER BY year DESC`)
+		FROM entries WHERE deleted_at IS NULL ORDER BY year DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query entry years: %w", err)
 	}
@@ -542,7 +562,7 @@ func (s *Store) EntryYears(ctx context.Context) ([]int, error) {
 // ordered case-insensitively.
 func (s *Store) Persons(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT DISTINCT person FROM entries WHERE person <> '' ORDER BY person COLLATE NOCASE`)
+		`SELECT DISTINCT person FROM entries WHERE person <> '' AND deleted_at IS NULL ORDER BY person COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("query persons: %w", err)
 	}
@@ -580,7 +600,7 @@ type PersonCount struct {
 func (s *Store) PersonCounts(ctx context.Context) ([]PersonCount, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT person, COUNT(*) FROM entries
-		 WHERE person <> ''
+		 WHERE person <> '' AND deleted_at IS NULL
 		 GROUP BY person COLLATE NOCASE
 		 ORDER BY person COLLATE NOCASE`)
 	if err != nil {
@@ -603,16 +623,18 @@ func (s *Store) PersonCounts(ctx context.Context) ([]PersonCount, error) {
 }
 
 // indexEntry keeps the trigram search index in sync with an entry.
-func indexEntry(ctx context.Context, tx *sql.Tx, id int64, word, meaning string) error {
+func indexEntry(ctx context.Context, tx *sql.Tx, id int64, word, meaning, person string) error {
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO entries_fts(rowid, word, meaning) VALUES (?, ?, ?)`, id, word, meaning,
+		`INSERT INTO entries_fts(rowid, word, meaning, person) VALUES (?, ?, ?, ?)`, id, word, meaning, person,
 	); err != nil {
 		return fmt.Errorf("index entry: %w", err)
 	}
 	return nil
 }
 
-// RebuildSearchIndex recreates the trigram index from the entries table.
+// RebuildSearchIndex recreates the trigram index from the live entries. Trashed
+// rows are skipped: they are invisible to search until an admin restores them,
+// and restoring reindexes them.
 func (s *Store) RebuildSearchIndex(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -623,7 +645,8 @@ func (s *Store) RebuildSearchIndex(ctx context.Context) error {
 		return fmt.Errorf("clear search index: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO entries_fts(rowid, word, meaning) SELECT id, word, meaning FROM entries`,
+		`INSERT INTO entries_fts(rowid, word, meaning, person)
+		 SELECT id, word, meaning, person FROM entries WHERE deleted_at IS NULL`,
 	); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("rebuild search index: %w", err)
@@ -634,9 +657,24 @@ func (s *Store) RebuildSearchIndex(ctx context.Context) error {
 	return nil
 }
 
-// GetEntry returns a single entry by ID.
+// GetEntry returns a single live entry by ID. A trashed entry is reported as
+// ErrNotFound; use GetEntryIncludingDeleted to read it as an administrator.
 func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.person, e.created_at,
+	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.person, e.created_at, e.deleted_at,
+		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
+		FROM entries e WHERE e.id = ? AND e.deleted_at IS NULL`, id)
+	entry, err := scanEntry(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Entry{}, ErrNotFound
+	}
+	return entry, err
+}
+
+// GetEntryIncludingDeleted returns an entry whether it is live or trashed. It
+// backs the admin edit page, the admin trash view and the original-photo
+// download.
+func (s *Store) GetEntryIncludingDeleted(ctx context.Context, id int64) (Entry, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT e.id, e.word, e.meaning, e.person, e.created_at, e.deleted_at,
 		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
 		FROM entries e WHERE e.id = ?`, id)
 	entry, err := scanEntry(row)
@@ -644,6 +682,31 @@ func (s *Store) GetEntry(ctx context.Context, id int64) (Entry, error) {
 		return Entry{}, ErrNotFound
 	}
 	return entry, err
+}
+
+// ListTrashedEntries returns every trashed entry, newest deletion first.
+func (s *Store) ListTrashedEntries(ctx context.Context) ([]Entry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.word, e.meaning, e.person, e.created_at, e.deleted_at,
+		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
+		FROM entries e WHERE e.deleted_at IS NOT NULL
+		ORDER BY e.deleted_at DESC, e.id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query trashed entries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	entries := make([]Entry, 0)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trashed entries: %w", err)
+	}
+	return entries, nil
 }
 
 // GetEntryPhoto returns the original photo attached to an entry.
@@ -762,6 +825,64 @@ func ValidatePerson(person string) error {
 	return nil
 }
 
+// insertEntryTx inserts an entry and its optional photo, updates the search
+// index in the same transaction and returns the new entry id. A zero createdAt
+// uses the column default.
+func insertEntryTx(ctx context.Context, tx *sql.Tx, word, meaning, person string, createdAt time.Time, photo *Photo) (int64, error) {
+	var (
+		res sql.Result
+		err error
+	)
+	if createdAt.IsZero() {
+		res, err = tx.ExecContext(ctx,
+			`INSERT INTO entries (word, meaning, person) VALUES (?, ?, ?)`, word, meaning, person)
+	} else {
+		res, err = tx.ExecContext(ctx,
+			`INSERT INTO entries (word, meaning, person, created_at) VALUES (?, ?, ?, ?)`,
+			word, meaning, person, createdAt.UTC().Format(time.RFC3339))
+	}
+	if err != nil {
+		return 0, fmt.Errorf("insert entry: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id: %w", err)
+	}
+	if photo != nil {
+		if err := upsertEntryPhotoTx(ctx, tx, id, photo); err != nil {
+			return 0, err
+		}
+	}
+	if err := indexEntry(ctx, tx, id, word, meaning, person); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// upsertEntryPhotoTx stores photo bytes for an entry, replacing any existing
+// photo for that entry.
+func upsertEntryPhotoTx(ctx context.Context, tx *sql.Tx, id int64, photo *Photo) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size, width, height,
+			display_content_type, display_data, display_sha256, display_size, display_width, display_height,
+			thumb_content_type, thumb_data, thumb_sha256, thumb_size, thumb_width, thumb_height)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(entry_id) DO UPDATE SET content_type = excluded.content_type,
+			data = excluded.data, sha256 = excluded.sha256, size = excluded.size,
+			width = excluded.width, height = excluded.height,
+			display_content_type = excluded.display_content_type, display_data = excluded.display_data,
+			display_sha256 = excluded.display_sha256, display_size = excluded.display_size,
+			display_width = excluded.display_width, display_height = excluded.display_height,
+			thumb_content_type = excluded.thumb_content_type, thumb_data = excluded.thumb_data,
+			thumb_sha256 = excluded.thumb_sha256, thumb_size = excluded.thumb_size,
+			thumb_width = excluded.thumb_width, thumb_height = excluded.thumb_height`,
+		photoInsertArgs(id, photo)...,
+	); err != nil {
+		return fmt.Errorf("store entry photo: %w", err)
+	}
+	return nil
+}
+
 // CreateEntry validates and inserts a new ledger entry, optionally with a photo.
 func (s *Store) CreateEntry(ctx context.Context, word, meaning, person string, photo *Photo) (Entry, error) {
 	word = strings.TrimSpace(word)
@@ -778,33 +899,12 @@ func (s *Store) CreateEntry(ctx context.Context, word, meaning, person string, p
 	if err != nil {
 		return Entry{}, fmt.Errorf("begin entry insert: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO entries (word, meaning, person) VALUES (?, ?, ?)`, word, meaning, person)
+	id, err := insertEntryTx(ctx, tx, word, meaning, person, time.Time{}, photo)
 	if err != nil {
 		_ = tx.Rollback()
 		if isUniqueViolation(err) {
 			return Entry{}, ErrDuplicate
 		}
-		return Entry{}, fmt.Errorf("insert entry: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		_ = tx.Rollback()
-		return Entry{}, fmt.Errorf("last insert id: %w", err)
-	}
-	if photo != nil {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size, width, height,
-				display_content_type, display_data, display_sha256, display_size, display_width, display_height,
-				thumb_content_type, thumb_data, thumb_sha256, thumb_size, thumb_width, thumb_height)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			photoInsertArgs(id, photo)...,
-		); err != nil {
-			_ = tx.Rollback()
-			return Entry{}, fmt.Errorf("insert entry photo: %w", err)
-		}
-	}
-	if err := indexEntry(ctx, tx, id, word, meaning); err != nil {
-		_ = tx.Rollback()
 		return Entry{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -813,10 +913,33 @@ func (s *Store) CreateEntry(ctx context.Context, word, meaning, person string, p
 	return s.GetEntry(ctx, id)
 }
 
-// CountEntries returns the total number of ledger entries.
+// AllEntryIDs returns the ids of every live entry in ascending order. It backs
+// the sitemap without loading full rows, and excludes trashed entries.
+func (s *Store) AllEntryIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM entries WHERE deleted_at IS NULL ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query entry ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan entry id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate entry ids: %w", err)
+	}
+	return ids, nil
+}
+
+// CountEntries returns the total number of live ledger entries.
 func (s *Store) CountEntries(ctx context.Context) (int, error) {
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries`).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries WHERE deleted_at IS NULL`).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count entries: %w", err)
 	}
 	return count, nil
@@ -836,7 +959,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 			MIN(created_at),
 			MAX(created_at),
 			COUNT(CASE WHEN created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 day') THEN 1 END)
-		FROM entries`).Scan(&stats.Total, &stats.UniqueWords, &firstEntry, &lastEntry, &stats.EntriesLast30d)
+		FROM entries WHERE deleted_at IS NULL`).Scan(&stats.Total, &stats.UniqueWords, &firstEntry, &lastEntry, &stats.EntriesLast30d)
 	if err != nil {
 		return Stats{}, fmt.Errorf("query stats: %w", err)
 	}
@@ -852,12 +975,17 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 			stats.LastEntryAt = &t
 		}
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM entry_photos`).Scan(&stats.WithPhoto); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM entry_photos p
+		 JOIN entries e ON e.id = p.entry_id
+		 WHERE e.deleted_at IS NULL`,
+	).Scan(&stats.WithPhoto); err != nil {
 		return Stats{}, fmt.Errorf("count photos: %w", err)
 	}
 	yearRows, err := s.db.QueryContext(ctx, `
 		SELECT CAST(strftime('%Y', created_at) AS INTEGER) AS year, COUNT(*)
 		FROM entries
+		WHERE deleted_at IS NULL
 		GROUP BY year
 		ORDER BY year`)
 	if err != nil {
@@ -877,7 +1005,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	personRows, err := s.db.QueryContext(ctx, `
 		SELECT person, COUNT(*)
 		FROM entries
-		WHERE person <> ''
+		WHERE person <> '' AND deleted_at IS NULL
 		GROUP BY person COLLATE NOCASE
 		ORDER BY COUNT(*) DESC, person COLLATE NOCASE
 		LIMIT 8`)
@@ -906,9 +1034,10 @@ func scanEntry(row rowScanner) (Entry, error) {
 	var (
 		entry     Entry
 		createdAt string
+		deletedAt sql.NullString
 		hasPhoto  bool
 	)
-	if err := row.Scan(&entry.ID, &entry.Word, &entry.Meaning, &entry.Person, &createdAt, &hasPhoto); err != nil {
+	if err := row.Scan(&entry.ID, &entry.Word, &entry.Meaning, &entry.Person, &createdAt, &deletedAt, &hasPhoto); err != nil {
 		return Entry{}, err
 	}
 	parsed, err := time.Parse(time.RFC3339, createdAt)
@@ -916,14 +1045,18 @@ func scanEntry(row rowScanner) (Entry, error) {
 		return Entry{}, fmt.Errorf("parse created_at %q: %w", createdAt, err)
 	}
 	entry.CreatedAt = parsed.UTC()
+	if deletedAt.Valid {
+		deleted, err := time.Parse(time.RFC3339, deletedAt.String)
+		if err != nil {
+			return Entry{}, fmt.Errorf("parse deleted_at %q: %w", deletedAt.String, err)
+		}
+		deleted = deleted.UTC()
+		entry.DeletedAt = &deleted
+	}
 	if hasPhoto {
 		entry.PhotoURL = photoURL(entry.ID)
 	}
 	return entry, nil
-}
-
-func escapeLike(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 // Admin is a local or OIDC-backed administrator account.
@@ -933,10 +1066,12 @@ type Admin struct {
 	PasswordHash string     `json:"-"`
 	Email        string     `json:"email,omitempty"`
 	DisplayName  string     `json:"display_name,omitempty"`
+	Role         string     `json:"role"`
 	OIDCIssuer   string     `json:"-"`
 	OIDCSubject  string     `json:"-"`
 	CreatedAt    time.Time  `json:"created_at"`
 	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	DisabledAt   *time.Time `json:"disabled_at,omitempty"`
 }
 
 // HasPassword reports whether the admin can sign in locally.
@@ -945,13 +1080,70 @@ func (a Admin) HasPassword() bool { return a.Username != "" && a.PasswordHash !=
 // IsOIDC reports whether the admin was created through OpenID Connect.
 func (a Admin) IsOIDC() bool { return a.OIDCSubject != "" }
 
+// IsOwner reports whether the admin holds the owner role.
+func (a Admin) IsOwner() bool { return a.Role == RoleOwner }
+
+// IsDisabled reports whether the account is disabled.
+func (a Admin) IsDisabled() bool { return a.DisabledAt != nil }
+
 // Session is an authenticated browser session.
 type Session struct {
-	TokenHash string
-	AdminID   int64
-	CSRFToken string
+	TokenHash  string
+	AdminID    int64
+	CSRFToken  string
+	SessionRef string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+}
+
+// SessionView is one row of the session list.
+type SessionView struct {
+	Ref       string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	Current   bool
+}
+
+// AuditRecord is one audit row to insert.
+type AuditRecord struct {
+	ActorID   *int64
+	ActorName string
+	Action    string
+	Subject   string
+	Detail    string
+	IP        string
+	CreatedAt time.Time
+}
+
+// AuditEntry is one audit row read back from the table.
+type AuditEntry struct {
+	ID        int64
+	ActorID   *int64
+	ActorName string
+	Action    string
+	Subject   string
+	Detail    string
+	IP        string
+	CreatedAt time.Time
+}
+
+// AuditFilter narrows and paginates the audit viewer.
+type AuditFilter struct {
+	Action  string
+	Actor   string
+	From    string
+	To      string
+	Page    int
+	PerPage int
+}
+
+// AuditPage is a page of audit rows plus the filtered total.
+type AuditPage struct {
+	Entries []AuditEntry
+	Total   int
+	Page    int
+	Pages   int
+	PerPage int
 }
 
 // SessionInfo bundles a session with its admin.
@@ -998,7 +1190,8 @@ func (s *Store) CreateFirstAdmin(ctx context.Context, username, passwordHash str
 		return Admin{}, ErrAdminExists
 	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO admins (username, password_hash) VALUES (?, ?)`, username, passwordHash)
+		`INSERT INTO admins (username, password_hash, role) VALUES (?, ?, ?)`,
+		username, passwordHash, RoleOwner)
 	if err != nil {
 		_ = tx.Rollback()
 		return Admin{}, fmt.Errorf("insert first admin: %w", err)
@@ -1017,16 +1210,245 @@ func (s *Store) CreateFirstAdmin(ctx context.Context, username, passwordHash str
 // GetAdmin returns an admin by ID.
 func (s *Store) GetAdmin(ctx context.Context, id int64) (Admin, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, email, display_name,
-		oidc_issuer, oidc_subject, created_at, last_login_at FROM admins WHERE id = ?`, id)
+		role, oidc_issuer, oidc_subject, created_at, last_login_at, disabled_at
+		FROM admins WHERE id = ?`, id)
 	return scanAdmin(row)
 }
 
 // GetAdminByUsername returns a local admin by username (case-insensitive).
+// Disabled accounts are treated as absent so login fails immediately.
 func (s *Store) GetAdminByUsername(ctx context.Context, username string) (Admin, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, email, display_name,
-		oidc_issuer, oidc_subject, created_at, last_login_at
-		FROM admins WHERE username = ? COLLATE NOCASE`, strings.TrimSpace(username))
+		role, oidc_issuer, oidc_subject, created_at, last_login_at, disabled_at
+		FROM admins WHERE username = ? COLLATE NOCASE AND disabled_at IS NULL`,
+		strings.TrimSpace(username))
 	return scanAdmin(row)
+}
+
+// ListAdmins returns every admin, oldest first.
+func (s *Store) ListAdmins(ctx context.Context) ([]Admin, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, password_hash, email, display_name,
+		role, oidc_issuer, oidc_subject, created_at, last_login_at, disabled_at
+		FROM admins ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list admins: %w", err)
+	}
+	defer rows.Close()
+	var admins []Admin
+	for rows.Next() {
+		admin, err := scanAdmin(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan admin: %w", err)
+		}
+		admins = append(admins, admin)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate admins: %w", err)
+	}
+	return admins, nil
+}
+
+// CreateAdmin creates a local admin with an explicit role.
+func (s *Store) CreateAdmin(ctx context.Context, username, displayName, passwordHash, role string) (Admin, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if !ValidRole(role) {
+		return Admin{}, fmt.Errorf("invalid admin role %q", role)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO admins (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)`,
+		username, passwordHash, strings.TrimSpace(displayName), role)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Admin{}, ErrAdminExists
+		}
+		return Admin{}, fmt.Errorf("create admin: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return Admin{}, fmt.Errorf("create admin id: %w", err)
+	}
+	return s.GetAdmin(ctx, id)
+}
+
+// CountEnabledOwners returns the number of enabled owners.
+func (s *Store) CountEnabledOwners(ctx context.Context) (int, error) {
+	return countEnabledOwners(ctx, s.db)
+}
+
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func countEnabledOwners(ctx context.Context, db queryRower) (int, error) {
+	var count int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM admins WHERE role = ? AND disabled_at IS NULL`, RoleOwner,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count enabled owners: %w", err)
+	}
+	return count, nil
+}
+
+// SetAdminRole changes an admin's role. It refuses to demote the last enabled
+// owner.
+func (s *Store) SetAdminRole(ctx context.Context, id int64, role string) (Admin, error) {
+	if !ValidRole(role) {
+		return Admin{}, fmt.Errorf("invalid admin role %q", role)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Admin{}, fmt.Errorf("begin role change: %w", err)
+	}
+	var current string
+	var disabled sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT role, disabled_at FROM admins WHERE id = ?`, id).Scan(&current, &disabled); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return Admin{}, ErrAdminNotFound
+		}
+		return Admin{}, fmt.Errorf("load admin role: %w", err)
+	}
+	if current == RoleOwner && role != RoleOwner && !disabled.Valid {
+		owners, err := countEnabledOwners(ctx, tx)
+		if err != nil {
+			_ = tx.Rollback()
+			return Admin{}, err
+		}
+		if owners < 2 {
+			_ = tx.Rollback()
+			return Admin{}, ErrLastOwner
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE admins SET role = ? WHERE id = ?`, role, id); err != nil {
+		_ = tx.Rollback()
+		return Admin{}, fmt.Errorf("set admin role: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Admin{}, fmt.Errorf("commit role change: %w", err)
+	}
+	return s.GetAdmin(ctx, id)
+}
+
+// DisableAdmin sets disabled_at, refusing to disable the last enabled owner.
+func (s *Store) DisableAdmin(ctx context.Context, id int64, at time.Time) error {
+	return s.setAdminDisabled(ctx, id, true, at)
+}
+
+// EnableAdmin clears disabled_at.
+func (s *Store) EnableAdmin(ctx context.Context, id int64) error {
+	return s.setAdminDisabled(ctx, id, false, time.Time{})
+}
+
+func (s *Store) setAdminDisabled(ctx context.Context, id int64, disable bool, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin admin disable: %w", err)
+	}
+	var role string
+	var disabled sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT role, disabled_at FROM admins WHERE id = ?`, id).Scan(&role, &disabled); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrAdminNotFound
+		}
+		return fmt.Errorf("load admin: %w", err)
+	}
+	if disable && role == RoleOwner && !disabled.Valid {
+		owners, err := countEnabledOwners(ctx, tx)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if owners < 2 {
+			_ = tx.Rollback()
+			return ErrLastOwner
+		}
+	}
+	var value any
+	if disable {
+		value = at.UTC().Format(time.RFC3339)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE admins SET disabled_at = ? WHERE id = ?`, value, id); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("set admin disabled_at: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit admin disable: %w", err)
+	}
+	return nil
+}
+
+// DeleteAdmin removes an admin row, cascading its sessions. It refuses to
+// delete the last enabled owner.
+func (s *Store) DeleteAdmin(ctx context.Context, id int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin admin delete: %w", err)
+	}
+	var role string
+	var disabled sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT role, disabled_at FROM admins WHERE id = ?`, id).Scan(&role, &disabled); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrAdminNotFound
+		}
+		return fmt.Errorf("load admin: %w", err)
+	}
+	if role == RoleOwner && !disabled.Valid {
+		owners, err := countEnabledOwners(ctx, tx)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if owners < 2 {
+			_ = tx.Rollback()
+			return ErrLastOwner
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM admins WHERE id = ?`, id); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("delete admin: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit admin delete: %w", err)
+	}
+	return nil
+}
+
+// SetAdminPassword replaces an admin's hash and revokes their sessions in one
+// transaction. keepTokenHash, when non-empty, survives the revocation so a
+// self-service change keeps the current session.
+func (s *Store) SetAdminPassword(ctx context.Context, id int64, passwordHash, keepTokenHash string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin password change: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE admins SET password_hash = ? WHERE id = ?`, passwordHash, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("set admin password: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		_ = tx.Rollback()
+		return ErrAdminNotFound
+	}
+	if keepTokenHash == "" {
+		_, err = tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE admin_id = ?`, id)
+	} else {
+		_, err = tx.ExecContext(ctx,
+			`DELETE FROM admin_sessions WHERE admin_id = ? AND token_hash <> ?`, id, keepTokenHash)
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("revoke admin sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit password change: %w", err)
+	}
+	return nil
 }
 
 // UpsertOIDCAdmin returns the admin matching an OIDC identity, creating one on
@@ -1042,9 +1464,21 @@ func (s *Store) UpsertOIDCAdmin(ctx context.Context, issuer, subject, email, dis
 	).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		// A fresh instance's first OIDC identity becomes its owner; later
+		// identities are editors so an OIDC login cannot silently gain owner
+		// rights on an established instance.
+		var count int
+		if countErr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins`).Scan(&count); countErr != nil {
+			_ = tx.Rollback()
+			return Admin{}, fmt.Errorf("count admins: %w", countErr)
+		}
+		role := RoleEditor
+		if count == 0 {
+			role = RoleOwner
+		}
 		res, insertErr := tx.ExecContext(ctx,
-			`INSERT INTO admins (email, display_name, oidc_issuer, oidc_subject) VALUES (?, ?, ?, ?)`,
-			email, displayName, issuer, subject)
+			`INSERT INTO admins (email, display_name, oidc_issuer, oidc_subject, role) VALUES (?, ?, ?, ?, ?)`,
+			email, displayName, issuer, subject, role)
 		if insertErr != nil {
 			_ = tx.Rollback()
 			return Admin{}, fmt.Errorf("insert oidc admin: %w", insertErr)
@@ -1081,45 +1515,64 @@ func (s *Store) TouchAdmin(ctx context.Context, id int64, at time.Time) error {
 	return nil
 }
 
-// CreateSession stores a hashed session token.
+// CreateSession stores a hashed session token together with a fresh random
+// reference used for per-session revocation.
 func (s *Store) CreateSession(ctx context.Context, session Session) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO admin_sessions (token_hash, admin_id, csrf_token, expires_at) VALUES (?, ?, ?, ?)`,
-		session.TokenHash, session.AdminID, session.CSRFToken, session.ExpiresAt.UTC().Format(time.RFC3339),
-	)
+	ref, err := newSessionRef()
 	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO admin_sessions (token_hash, admin_id, csrf_token, session_ref, expires_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		session.TokenHash, session.AdminID, session.CSRFToken, ref,
+		session.ExpiresAt.UTC().Format(time.RFC3339),
+	); err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
 	return nil
 }
 
-// GetSession returns a live session and its admin.
+// newSessionRef returns a 16-byte random hex reference.
+func newSessionRef() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("session reference: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// GetSession returns a live session and its admin. Disabled admins are treated
+// as having no session so disabling takes effect on the next request.
 func (s *Store) GetSession(ctx context.Context, tokenHash string) (SessionInfo, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	row := s.db.QueryRowContext(ctx, `SELECT s.token_hash, s.admin_id, s.csrf_token, s.created_at, s.expires_at,
-		a.id, a.username, a.password_hash, a.email, a.display_name, a.oidc_issuer, a.oidc_subject,
-		a.created_at, a.last_login_at
+	row := s.db.QueryRowContext(ctx, `SELECT s.token_hash, s.admin_id, s.csrf_token, s.session_ref,
+		s.created_at, s.expires_at,
+		a.id, a.username, a.password_hash, a.email, a.display_name, a.role, a.oidc_issuer,
+		a.oidc_subject, a.created_at, a.last_login_at
 		FROM admin_sessions s JOIN admins a ON a.id = s.admin_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`, tokenHash, now)
+		WHERE s.token_hash = ? AND s.expires_at > ? AND a.disabled_at IS NULL`, tokenHash, now)
 
 	var (
-		info      SessionInfo
-		username  sql.NullString
-		password  sql.NullString
-		created   string
-		expires   string
-		aCreated  string
-		lastLogin sql.NullString
+		info       SessionInfo
+		sessionRef string
+		username   sql.NullString
+		password   sql.NullString
+		created    string
+		expires    string
+		aCreated   string
+		lastLogin  sql.NullString
 	)
 	if err := row.Scan(&info.Session.TokenHash, &info.Session.AdminID, &info.Session.CSRFToken,
-		&created, &expires, &info.Admin.ID, &username, &password,
-		&info.Admin.Email, &info.Admin.DisplayName, &info.Admin.OIDCIssuer,
+		&sessionRef, &created, &expires, &info.Admin.ID, &username, &password,
+		&info.Admin.Email, &info.Admin.DisplayName, &info.Admin.Role, &info.Admin.OIDCIssuer,
 		&info.Admin.OIDCSubject, &aCreated, &lastLogin); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return SessionInfo{}, ErrSessionNotFound
 		}
 		return SessionInfo{}, fmt.Errorf("query session: %w", err)
 	}
+	info.Session.SessionRef = sessionRef
 	info.Admin.Username = username.String
 	info.Admin.PasswordHash = password.String
 	var err error
@@ -1157,6 +1610,206 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 		return fmt.Errorf("delete expired sessions: %w", err)
 	}
 	return nil
+}
+
+// ListSessionsForAdmin returns an admin's sessions, newest first.
+func (s *Store) ListSessionsForAdmin(ctx context.Context, adminID int64, currentTokenHash string) ([]SessionView, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT session_ref, token_hash, created_at, expires_at FROM admin_sessions
+		WHERE admin_id = ? ORDER BY created_at DESC`, adminID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+	var sessions []SessionView
+	for rows.Next() {
+		var (
+			view    SessionView
+			ref     string
+			token   string
+			created string
+			expires string
+		)
+		if err := rows.Scan(&ref, &token, &created, &expires); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		view.Ref = ref
+		view.Current = token == currentTokenHash
+		if view.CreatedAt, err = time.Parse(time.RFC3339, created); err != nil {
+			return nil, fmt.Errorf("parse session created_at: %w", err)
+		}
+		if view.ExpiresAt, err = time.Parse(time.RFC3339, expires); err != nil {
+			return nil, fmt.Errorf("parse session expires_at: %w", err)
+		}
+		sessions = append(sessions, view)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions: %w", err)
+	}
+	return sessions, nil
+}
+
+// DeleteSessionByRef removes one session by its reference. When scopeAdminID is
+// non-zero the session must belong to that admin; zero lets an owner revoke any
+// reference. The reference resolves to a token hash and the row is deleted by
+// that hash, so the delete itself always targets a single token. It returns how
+// many rows were deleted.
+func (s *Store) DeleteSessionByRef(ctx context.Context, ref string, scopeAdminID int64) (int64, error) {
+	if strings.TrimSpace(ref) == "" {
+		return 0, nil
+	}
+	lookup := `SELECT token_hash FROM admin_sessions WHERE session_ref = ?`
+	args := []any{ref}
+	if scopeAdminID != 0 {
+		lookup += ` AND admin_id = ?`
+		args = append(args, scopeAdminID)
+	}
+	var tokenHash string
+	if err := s.db.QueryRowContext(ctx, lookup, args...).Scan(&tokenHash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("find session by ref: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE token_hash = ?`, tokenHash)
+	if err != nil {
+		return 0, fmt.Errorf("delete session by token: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count deleted sessions: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteOtherSessionsForAdmin removes every session of adminID except the one
+// identified by keepTokenHash, returning the number deleted.
+func (s *Store) DeleteOtherSessionsForAdmin(ctx context.Context, adminID int64, keepTokenHash string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM admin_sessions WHERE admin_id = ? AND token_hash <> ?`, adminID, keepTokenHash)
+	if err != nil {
+		return 0, fmt.Errorf("delete other sessions: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count deleted sessions: %w", err)
+	}
+	return n, nil
+}
+
+// RecordAudit appends one audit row. Callers log and ignore a failure rather
+// than reverting the action it describes.
+func (s *Store) RecordAudit(ctx context.Context, rec AuditRecord) error {
+	createdAt := rec.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO admin_audit (actor_id, actor_name, action, subject, detail, ip, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		rec.ActorID, rec.ActorName, rec.Action, rec.Subject, rec.Detail, rec.IP,
+		createdAt.UTC().Format(time.RFC3339),
+	); err != nil {
+		return fmt.Errorf("record audit: %w", err)
+	}
+	return nil
+}
+
+// ListAudit returns a filtered, paginated page of audit rows newest first.
+func (s *Store) ListAudit(ctx context.Context, filter AuditFilter) (AuditPage, error) {
+	perPage := filter.PerPage
+	if perPage <= 0 {
+		perPage = 50
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+
+	var (
+		where []string
+		args  []any
+	)
+	if action := strings.TrimSpace(filter.Action); action != "" {
+		where = append(where, `action LIKE ?`)
+		args = append(args, "%"+action+"%")
+	}
+	if actor := strings.TrimSpace(filter.Actor); actor != "" {
+		where = append(where, `actor_name LIKE ?`)
+		args = append(args, "%"+actor+"%")
+	}
+	if from := strings.TrimSpace(filter.From); from != "" {
+		where = append(where, `created_at >= ?`)
+		args = append(args, normalizeAuditDate(from, false))
+	}
+	if to := strings.TrimSpace(filter.To); to != "" {
+		where = append(where, `created_at <= ?`)
+		args = append(args, normalizeAuditDate(to, true))
+	}
+	clause := ""
+	if len(where) > 0 {
+		clause = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_audit`+clause, args...).Scan(&total); err != nil {
+		return AuditPage{}, fmt.Errorf("count audit: %w", err)
+	}
+	pages := 0
+	if total > 0 {
+		pages = (total + perPage - 1) / perPage
+	}
+	if pages > 0 && page > pages {
+		page = pages
+	}
+
+	query := `SELECT id, actor_id, actor_name, action, subject, detail, ip, created_at
+		FROM admin_audit` + clause + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	rows, err := s.db.QueryContext(ctx, query, append(args, perPage, (page-1)*perPage)...)
+	if err != nil {
+		return AuditPage{}, fmt.Errorf("list audit: %w", err)
+	}
+	defer rows.Close()
+
+	out := AuditPage{Total: total, Page: page, Pages: pages, PerPage: perPage}
+	for rows.Next() {
+		var (
+			entry     AuditEntry
+			actorID   sql.NullInt64
+			createdAt string
+		)
+		if err := rows.Scan(&entry.ID, &actorID, &entry.ActorName, &entry.Action,
+			&entry.Subject, &entry.Detail, &entry.IP, &createdAt); err != nil {
+			return AuditPage{}, fmt.Errorf("scan audit: %w", err)
+		}
+		if actorID.Valid {
+			id := actorID.Int64
+			entry.ActorID = &id
+		}
+		if entry.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
+			return AuditPage{}, fmt.Errorf("parse audit created_at: %w", err)
+		}
+		out.Entries = append(out.Entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return AuditPage{}, fmt.Errorf("iterate audit: %w", err)
+	}
+	return out, nil
+}
+
+// normalizeAuditDate turns a date-only filter into a full timestamp so string
+// comparison against RFC3339 rows behaves as expected.
+func normalizeAuditDate(value string, endOfDay bool) string {
+	if len(value) == 10 {
+		if endOfDay {
+			return value + "T23:59:59Z"
+		}
+		return value + "T00:00:00Z"
+	}
+	return value
 }
 
 // UpdateEntry applies an administrator edit, optionally replacing or removing
@@ -1218,24 +1871,9 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 	}
 	switch {
 	case update.Photo != nil:
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO entry_photos (entry_id, content_type, data, sha256, size, width, height,
-				display_content_type, display_data, display_sha256, display_size, display_width, display_height,
-				thumb_content_type, thumb_data, thumb_sha256, thumb_size, thumb_width, thumb_height)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(entry_id) DO UPDATE SET content_type = excluded.content_type,
-				data = excluded.data, sha256 = excluded.sha256, size = excluded.size,
-				width = excluded.width, height = excluded.height,
-				display_content_type = excluded.display_content_type, display_data = excluded.display_data,
-				display_sha256 = excluded.display_sha256, display_size = excluded.display_size,
-				display_width = excluded.display_width, display_height = excluded.display_height,
-				thumb_content_type = excluded.thumb_content_type, thumb_data = excluded.thumb_data,
-				thumb_sha256 = excluded.thumb_sha256, thumb_size = excluded.thumb_size,
-				thumb_width = excluded.thumb_width, thumb_height = excluded.thumb_height`,
-			photoInsertArgs(update.ID, update.Photo)...,
-		); err != nil {
+		if err := upsertEntryPhotoTx(ctx, tx, update.ID, update.Photo); err != nil {
 			_ = tx.Rollback()
-			return Entry{}, fmt.Errorf("replace entry photo: %w", err)
+			return Entry{}, err
 		}
 	case update.RemovePhoto:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM entry_photos WHERE entry_id = ?`, update.ID); err != nil {
@@ -1244,8 +1882,8 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT OR REPLACE INTO entries_fts(rowid, word, meaning) VALUES (?, ?, ?)`,
-		update.ID, update.Word, update.Meaning,
+		`INSERT OR REPLACE INTO entries_fts(rowid, word, meaning, person) VALUES (?, ?, ?, ?)`,
+		update.ID, update.Word, update.Meaning, update.Person,
 	); err != nil {
 		_ = tx.Rollback()
 		return Entry{}, fmt.Errorf("update search index: %w", err)
@@ -1253,11 +1891,11 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 	if err := tx.Commit(); err != nil {
 		return Entry{}, fmt.Errorf("commit entry update: %w", err)
 	}
-	return s.GetEntry(ctx, update.ID)
+	return s.GetEntryIncludingDeleted(ctx, update.ID)
 }
 
-// DeleteEntries removes entries and their photos, returning the number deleted.
-func (s *Store) DeleteEntries(ctx context.Context, ids []int64) (int64, error) {
+// cleanIDs drops non-positive and duplicate ids while preserving order.
+func cleanIDs(ids []int64) []any {
 	seen := make(map[int64]bool, len(ids))
 	clean := make([]any, 0, len(ids))
 	for _, id := range ids {
@@ -1267,30 +1905,126 @@ func (s *Store) DeleteEntries(ctx context.Context, ids []int64) (int64, error) {
 		seen[id] = true
 		clean = append(clean, id)
 	}
+	return clean
+}
+
+// placeholders builds "?,?,?" for n arguments.
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// SoftDeleteEntries marks entries as trashed by setting deleted_at, returning
+// the number of rows that moved to the trash. The index rows are removed so a
+// trashed entry cannot be found even by a future path that forgets the
+// deleted_at guard; RestoreEntries reindexes them. Photos are kept.
+func (s *Store) SoftDeleteEntries(ctx context.Context, ids []int64) (int64, error) {
+	clean := cleanIDs(ids)
 	if len(clean) == 0 {
 		return 0, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(clean)), ",")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin entry delete: %w", err)
+		return 0, fmt.Errorf("begin entry trash: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM entries_fts WHERE rowid IN (`+placeholders+`)`, clean...); err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM entries_fts WHERE rowid IN (`+placeholders(len(clean))+`)`, clean...,
+	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("delete search index rows: %w", err)
+		return 0, fmt.Errorf("remove trashed search rows: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE id IN (`+placeholders+`)`, clean...)
+	res, err := tx.ExecContext(ctx,
+		`UPDATE entries SET deleted_at = ? WHERE id IN (`+placeholders(len(clean))+`) AND deleted_at IS NULL`,
+		append([]any{time.Now().UTC().Format(time.RFC3339)}, clean...)...,
+	)
 	if err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("delete entries: %w", err)
+		return 0, fmt.Errorf("soft delete entries: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("deleted rows: %w", err)
+		return 0, fmt.Errorf("soft deleted rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit entry delete: %w", err)
+		return 0, fmt.Errorf("commit entry trash: %w", err)
+	}
+	return n, nil
+}
+
+// RestoreEntries clears deleted_at for the matching trashed entries and
+// returns the number of rows actually restored. Ids that are already live are
+// ignored, making restore idempotent. Restored rows are reindexed with all
+// three searchable columns.
+func (s *Store) RestoreEntries(ctx context.Context, ids []int64) (int64, error) {
+	clean := cleanIDs(ids)
+	if len(clean) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin entry restore: %w", err)
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE entries SET deleted_at = NULL WHERE id IN (`+placeholders(len(clean))+`) AND deleted_at IS NOT NULL`,
+		clean...,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("restore entries: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("restored rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO entries_fts(rowid, word, meaning, person)
+		 SELECT id, word, meaning, person FROM entries
+		 WHERE id IN (`+placeholders(len(clean))+`) AND deleted_at IS NULL`,
+		clean...,
+	); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("reindex restored entries: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit entry restore: %w", err)
+	}
+	return n, nil
+}
+
+// PurgeEntries permanently deletes trashed entries: the FTS rows first, then
+// the entry rows, whose photos cascade away. Live ids are ignored.
+func (s *Store) PurgeEntries(ctx context.Context, ids []int64) (int64, error) {
+	clean := cleanIDs(ids)
+	if len(clean) == 0 {
+		return 0, nil
+	}
+	args := placeholders(len(clean))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin entry purge: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM entries_fts WHERE rowid IN (
+			SELECT id FROM entries WHERE id IN (`+args+`) AND deleted_at IS NOT NULL)`,
+		clean...,
+	); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("purge search index rows: %w", err)
+	}
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM entries WHERE id IN (`+args+`) AND deleted_at IS NOT NULL`, clean...)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("purge entries: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("purged rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit entry purge: %w", err)
 	}
 	return n, nil
 }
@@ -1342,14 +2076,16 @@ func (s *Store) SetSettings(ctx context.Context, values map[string]string) error
 
 func scanAdmin(row rowScanner) (Admin, error) {
 	var (
-		admin     Admin
-		username  sql.NullString
-		password  sql.NullString
-		created   string
-		lastLogin sql.NullString
+		admin      Admin
+		username   sql.NullString
+		password   sql.NullString
+		created    string
+		lastLogin  sql.NullString
+		disabledAt sql.NullString
 	)
 	if err := row.Scan(&admin.ID, &username, &password, &admin.Email,
-		&admin.DisplayName, &admin.OIDCIssuer, &admin.OIDCSubject, &created, &lastLogin); err != nil {
+		&admin.DisplayName, &admin.Role, &admin.OIDCIssuer, &admin.OIDCSubject,
+		&created, &lastLogin, &disabledAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Admin{}, ErrAdminNotFound
 		}
@@ -1365,6 +2101,12 @@ func scanAdmin(row rowScanner) (Admin, error) {
 		if t, err := time.Parse(time.RFC3339, lastLogin.String); err == nil {
 			t = t.UTC()
 			admin.LastLoginAt = &t
+		}
+	}
+	if disabledAt.Valid {
+		if t, err := time.Parse(time.RFC3339, disabledAt.String); err == nil {
+			t = t.UTC()
+			admin.DisabledAt = &t
 		}
 	}
 	return admin, nil

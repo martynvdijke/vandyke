@@ -1,0 +1,49 @@
+{{define "admin-import"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Transfer</p>
+    <h1>Import ledger</h1>
+    <p class="admin-lede">Upload a JSON export or a ZIP archive produced by the export routes. Preview classifies every row without writing; apply writes the whole file in one transaction.</p>
+  </div>
+</div>
+
+<section class="admin-card admin-settings-card">
+  <form method="post" action="/admin/import" enctype="multipart/form-data" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="field">
+      <span class="field-label">Export file</span>
+      <input type="file" name="file" accept=".json,.zip,application/json,application/zip" required>
+      <span class="field-hint">A JSON envelope (<code>export.json</code>) or a ZIP archive containing <code>entries.json</code> and optional <code>photos/{id}.jpg</code> files.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Mode</span>
+      <select name="mode">
+        <option value="preview" selected>Preview (write nothing)</option>
+        <option value="apply">Apply (write the file)</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Existing rows</span>
+      <select name="conflict">
+        <option value="skip" selected>Skip duplicates</option>
+        <option value="replace">Replace person, date and photo</option>
+      </select>
+      <span class="field-hint">Replace never changes an existing row's word or meaning.</span>
+    </label>
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Upload</button>
+      <a class="btn btn-ghost" href="/admin">Cancel</a>
+    </div>
+  </form>
+  <div class="admin-env-note">
+    <h2>Limits</h2>
+    <dl>
+      <div><dt>Request</dt><dd>{{.MaxBytes}} bytes (64 MiB)</dd></div>
+      <div><dt>Entries</dt><dd>{{.MaxEntries}}</dd></div>
+      <div><dt>Per photo</dt><dd>{{.MaxPhotoBytes}} bytes (10 MiB)</dd></div>
+    </dl>
+    <p class="field-hint">A ZIP export carries the 1600 px display derivative, not the original photo. Use the per-photo admin download when you need the original bytes.</p>
+  </div>
+</section>
+{{template "admin-foot" .}}{{end}}

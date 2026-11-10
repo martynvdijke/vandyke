@@ -1,0 +1,44 @@
+{{define "admin-account"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Your account</p>
+    <h1>{{if .Admin.Username}}{{.Admin.Username}}{{else}}{{.Admin.DisplayName}}{{end}}</h1>
+    <p class="admin-lede">Change your own password. Other sessions are signed out; this one stays active.</p>
+  </div>
+  <a class="btn btn-ghost" href="/admin/sessions">Manage sessions</a>
+</div>
+{{template "admin-flash" .}}
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="admin-card">
+  <dl class="admin-summary">
+    <dt>Role</dt><dd>{{.Admin.Role}}</dd>
+    <dt>Signed in as</dt><dd>{{if .Admin.Username}}{{.Admin.Username}}{{else}}{{.Admin.DisplayName}}{{end}}</dd>
+    <dt>Last login</dt><dd>{{formatDateTimeP .Admin.LastLoginAt}}</dd>
+  </dl>
+  {{if .HasLocal}}
+  <form method="post" action="/admin/account/password" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="field">
+      <span class="field-label">Current password</span>
+      <input type="password" name="current_password" required autocomplete="current-password">
+    </label>
+    <label class="field">
+      <span class="field-label">New password</span>
+      <input type="password" name="new_password" required minlength="12" maxlength="200" autocomplete="new-password">
+      <span class="field-hint">At least 12 characters.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Confirm new password</span>
+      <input type="password" name="confirm_password" required minlength="12" maxlength="200" autocomplete="new-password">
+    </label>
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Change password</button>
+    </div>
+  </form>
+  {{else}}
+  <p class="admin-muted">This account signs in through the identity provider, so it has no local password.</p>
+  {{end}}
+</section>
+{{template "admin-foot" .}}{{end}}

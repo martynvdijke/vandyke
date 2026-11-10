@@ -7,17 +7,20 @@
   <meta name="description" content="Statistics for the vanDyke misspelling ledger: slips per year, unique misspellings, photographs and the names that turn up most.">
   <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/css/app.css">
   {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
   <script src="/static/js/app.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#content">Skip to content</a>
   <div class="grain" aria-hidden="true"></div>
 
   {{template "masthead" .}}
 
-  <main class="page stats-page">
+  <main class="page stats-page" id="content" tabindex="-1">
     <section class="stats-hero">
       <p class="eyebrow">The ledger, counted</p>
       <h1 class="stats-title">The ledger in numbers</h1>
@@ -48,7 +51,7 @@
       <p class="panel-kicker">Nothing tallied yet</p>
       <h2 class="panel-title">The ledger is still blank</h2>
       <p class="empty-text">There is nothing to count. The first slip of the pen will start the chart — the columns, the years and the names all follow from there.</p>
-      <p class="empty-actions"><a class="btn btn-primary" href="/?add=1" data-dialog-open="#add-dialog">Add the first entry</a></p>
+      <p class="empty-actions"><a class="btn btn-primary" href="/?add=1" data-dialog-open="#add-dialog" aria-haspopup="dialog" aria-controls="add-dialog" aria-expanded="false">Add the first entry</a></p>
     </section>
     {{else}}
     <div class="stats-columns">
@@ -74,7 +77,7 @@
           {{if .Years}}
           <p class="panel-sub">Every calendar year the ledger has known, the quiet ones included.</p>
           <figure class="chart-figure">
-            <ol class="bars{{if le (len .Years) 12}} is-fitted{{end}}" style="--cols:{{len .Years}}" aria-label="Entries per year">
+            <ol class="bars{{if le (len .Years) 12}} is-fitted{{end}}" style="--cols:{{len .Years}}" aria-hidden="true">
               {{range .Years}}
               <li class="bar-col{{if .Current}} is-current{{end}}{{if eq .Count 0}} is-quiet{{end}}">
                 <span class="bar-count">{{.Count}}</span>
@@ -87,6 +90,13 @@
               <span class="legend-mark" aria-hidden="true"></span> {{.Year}} so far
             </figcaption>
           </figure>
+          <table class="visually-hidden">
+            <caption>Entries per year</caption>
+            <thead><tr><th scope="col">Year</th><th scope="col">Entries</th></tr></thead>
+            <tbody>
+              {{range .Years}}<tr class="year-row"><th scope="row">{{.Year}}</th><td>{{.Count}}</td></tr>{{end}}
+            </tbody>
+          </table>
           {{else}}
           <p class="panel-note">No entries have been dated yet.</p>
           {{end}}
@@ -99,7 +109,7 @@
           <h2 id="persons-title" class="panel-title">Most frequent slips</h2>
           <p class="panel-sub">The names written on the most slips.</p>
           {{if .Persons}}
-          <ol class="person-bars">
+          <ol class="person-bars" aria-hidden="true">
             {{range .Persons}}
             <li class="person-bar">
               <span class="pb-head">
@@ -110,6 +120,13 @@
             </li>
             {{end}}
           </ol>
+          <table class="visually-hidden">
+            <caption>Slips per person</caption>
+            <thead><tr><th scope="col">Name</th><th scope="col">Slips</th></tr></thead>
+            <tbody>
+              {{range .Persons}}<tr class="person-row"><th scope="row">{{.Person}}</th><td>{{.Count}}</td></tr>{{end}}
+            </tbody>
+          </table>
           {{else}}
           <p class="panel-note">No slip has been signed with a name yet.</p>
           {{end}}
@@ -135,5 +152,14 @@
   </main>
 
   {{template "footer" .}}
+
+  <a class="fab" href="/?add=1" data-dialog-open="#add-dialog" aria-label="Add a misspelling" aria-haspopup="dialog" aria-controls="add-dialog" aria-expanded="false">+</a>
+
+  {{template "add-dialog" .}}
+  {{template "info-dialog" .}}
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <script src="/static/vendor/htmx.min.js" defer></script>
 </body>
 </html>{{end}}

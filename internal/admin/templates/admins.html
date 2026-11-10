@@ -1,0 +1,108 @@
+{{define "admin-admins"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Administration</p>
+    <h1>Admins</h1>
+    <p class="admin-lede">Owners manage admins and destructive actions; editors maintain the ledger. The last enabled owner cannot be demoted, disabled or deleted.</p>
+  </div>
+  <a class="btn btn-ghost" href="/admin">← Back to entries</a>
+</div>
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="admin-card">
+  <h2>Create a local admin</h2>
+  <form method="post" action="/admin/admins" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-grid">
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input type="text" name="username" required maxlength="64" autocomplete="off">
+        <span class="field-hint">3–64 characters: letters, numbers, dots, dashes or underscores.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Display name <span class="field-optional">optional</span></span>
+        <input type="text" name="display_name" maxlength="100" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" name="password" required minlength="12" maxlength="200" autocomplete="new-password">
+        <span class="field-hint">At least 12 characters.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Role</span>
+        <select name="role">
+          <option value="editor"{{if eq .FormRole "editor"}} selected{{end}}>Editor</option>
+          <option value="owner"{{if eq .FormRole "owner"}} selected{{end}}>Owner</option>
+        </select>
+      </label>
+    </div>
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Create admin</button>
+    </div>
+  </form>
+</section>
+
+<section class="admin-card">
+  <h2>All admins</h2>
+  <div class="admin-table" role="table" aria-label="Admin accounts">
+    <div class="admin-row admin-row-head" role="row">
+      <span role="columnheader">Admin</span>
+      <span role="columnheader">Role</span>
+      <span role="columnheader">State</span>
+      <span role="columnheader">Created</span>
+      <span role="columnheader">Last login</span>
+      <span role="columnheader">Actions</span>
+    </div>
+    <ol class="admin-rows" role="rowgroup">
+      {{range $a := .Admins}}
+      <li class="admin-row" role="row">
+        <span role="cell">
+          <strong>{{if $a.Username}}{{$a.Username}}{{else}}{{$a.DisplayName}}{{end}}</strong>
+          {{if $a.DisplayName}}<span class="admin-muted">· {{$a.DisplayName}}</span>{{end}}
+          {{if $a.IsOIDC}}<span class="admin-muted">· OIDC</span>{{end}}
+          {{if eq $a.ID $.Admin.ID}}<span class="admin-muted">· you</span>{{end}}
+        </span>
+        <span role="cell">
+          <form method="post" action="/admin/admins/{{$a.ID}}/role" class="admin-inline-form">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <select name="role" aria-label="Role for {{$a.Username}}">
+              <option value="editor"{{if eq $a.Role "editor"}} selected{{end}}>Editor</option>
+              <option value="owner"{{if eq $a.Role "owner"}} selected{{end}}>Owner</option>
+            </select>
+            <button class="btn btn-ghost btn-small" type="submit">Save</button>
+          </form>
+        </span>
+        <span role="cell">{{if $a.IsDisabled}}Disabled {{formatDateTimeP $a.DisabledAt}}{{else}}Enabled{{end}}</span>
+        <span role="cell"><time datetime="{{$a.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate $a.CreatedAt}}</time></span>
+        <span role="cell">{{formatDateTimeP $a.LastLoginAt}}</span>
+        <span role="cell">
+          <div class="admin-row-actions">
+            {{if $a.IsDisabled}}
+            <form method="post" action="/admin/admins/{{$a.ID}}/enable">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="btn btn-primary btn-small" type="submit">Enable</button>
+            </form>
+            {{else}}
+            <form method="post" action="/admin/admins/{{$a.ID}}/disable" data-confirm-disable>
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="btn btn-ghost btn-small" type="submit">Disable</button>
+            </form>
+            {{end}}
+            <form method="post" action="/admin/admins/{{$a.ID}}/password" class="admin-inline-form">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <input type="password" name="password" minlength="12" maxlength="200" placeholder="New password" aria-label="New password for {{$a.Username}}" autocomplete="new-password" required>
+              <button class="btn btn-ghost btn-small" type="submit">Reset</button>
+            </form>
+            <form method="post" action="/admin/admins/{{$a.ID}}/delete" data-confirm-delete>
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="btn btn-danger btn-small" type="submit">Delete</button>
+            </form>
+          </div>
+        </span>
+      </li>
+      {{end}}
+    </ol>
+  </div>
+</section>
+{{template "admin-foot" .}}{{end}}

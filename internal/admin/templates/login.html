@@ -4,8 +4,8 @@
     <p class="eyebrow">Administration</p>
     <h1>Sign in</h1>
     <p class="admin-lede">Edit and remove ledger entries. Adding entries stays open to everyone.</p>
-    {{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
-    <form method="post" action="/admin/login" class="admin-form">
+    {{if .Error}}<p id="login-error" class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/admin/login" class="admin-form"{{if .Error}} aria-describedby="login-error"{{end}}>
       <input type="hidden" name="next" value="{{.Next}}">
       <label class="field">
         <span class="field-label">Username</span>

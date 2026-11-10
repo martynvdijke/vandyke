@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -10,14 +12,19 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"vandyke.thor.edu/vandyke/internal/config"
+	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
+	"vandyke.thor.edu/vandyke/internal/searchquery"
 	"vandyke.thor.edu/vandyke/internal/store"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 func discardLogger() *slog.Logger {
@@ -38,7 +45,7 @@ func newTestWebWithStore(t *testing.T, umami config.Umami, limiter *ratelimit.Li
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	w, err := New(st, limiter, func() config.Umami { return umami }, false, "", discardLogger())
+	w, err := New(st, limiter, func() config.Umami { return umami }, func() config.Webhook { return config.Webhook{} }, false, "", discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -632,7 +639,9 @@ func TestLedgerFilters(t *testing.T) {
 		}
 	}
 
-	status, _, photos := fetch(t, srv, "/entries?photo=1&per_page=100", nil)
+	// The filter assertions read the ledger fragment so the shared footer copy
+	// (which mentions "kast systeem") cannot mask a regression.
+	status, _, photos := fetch(t, srv, "/entries?photo=1&per_page=100", map[string]string{"HX-Request": "true"})
 	if status != http.StatusOK {
 		t.Fatalf("photo filter status = %d", status)
 	}
@@ -646,7 +655,7 @@ func TestLedgerFilters(t *testing.T) {
 		t.Fatal("photo filter lost the permalink")
 	}
 
-	_, _, year := fetch(t, srv, "/entries?year=2026&per_page=100", nil)
+	_, _, year := fetch(t, srv, "/entries?year=2026&per_page=100", map[string]string{"HX-Request": "true"})
 	if !strings.Contains(year, "from 2026") {
 		t.Fatal("year filter label not rendered")
 	}
@@ -661,4 +670,579 @@ func TestPhotoInputAllowsCameraCapture(t *testing.T) {
 	if !strings.Contains(body, `capture="environment"`) {
 		t.Fatal("photo input is missing mobile camera capture")
 	}
+}
+
+func TestPermalinkTrashedEntryNotFound(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	entry, err := st.CreateEntry(t.Context(), "verdwenen", "gone", "", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	path := "/e/" + strconv.FormatInt(entry.ID, 10)
+	if status, _, body := fetch(t, srv, path, nil); status != http.StatusOK || !strings.Contains(body, "verdwenen") {
+		t.Fatalf("live permalink = %d, want 200 with entry", status)
+	}
+
+	if _, err := st.SoftDeleteEntries(t.Context(), []int64{entry.ID}); err != nil {
+		t.Fatalf("SoftDeleteEntries: %v", err)
+	}
+	status, _, body := fetch(t, srv, path, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("trashed permalink status = %d, want 404", status)
+	}
+	if !strings.Contains(body, "Entry not found") {
+		t.Fatalf("trashed permalink did not render the not-found page")
+	}
+	if strings.Contains(body, "verdwenen") {
+		t.Fatal("trashed permalink leaked the entry content")
+	}
+
+	status, _, _ = fetch(t, srv, "/entries?q=verdwenen", nil)
+	if status != http.StatusOK {
+		t.Fatalf("ledger status = %d, want 200", status)
+	}
+	status, _, ledgerBody := fetch(t, srv, "/", nil)
+	if status != http.StatusOK {
+		t.Fatalf("index status = %d, want 200", status)
+	}
+	if strings.Contains(ledgerBody, "verdwenen") {
+		t.Fatal("trashed entry still rendered on the index")
+	}
+}
+
+func newTestWebWithBaseURL(t *testing.T, baseURL string) (*httptest.Server, *store.Store) {
+	t.Helper()
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "web-base.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, func() config.Webhook { return config.Webhook{} }, false, baseURL, discardLogger())
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+	mux := http.NewServeMux()
+	w.Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, st
+}
+
+func TestLedgerDocumentAndFragment(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	status, headers, doc := fetch(t, srv, "/entries?sort=word&order=asc", nil)
+	if status != http.StatusOK {
+		t.Fatalf("document status = %d, want 200", status)
+	}
+	if got := headers.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("document content type = %q", got)
+	}
+	for _, want := range []string{
+		"<html", "<head", `href="/static/css/app.css"`, `class="masthead"`,
+		`id="search-form"`, `id="ledger"`, `id="add-dialog"`, `id="info-dialog"`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("standalone /entries is missing %q", want)
+		}
+	}
+	if !strings.Contains(doc, `href="/entries?`) {
+		t.Error("standalone /entries does not keep absolute sort/pager links")
+	}
+
+	status, _, frag := fetch(t, srv, "/entries?sort=word&order=asc", map[string]string{"HX-Request": "true"})
+	if status != http.StatusOK {
+		t.Fatalf("fragment status = %d, want 200", status)
+	}
+	if strings.Contains(frag, "<html") {
+		t.Fatal("HTMX response wrapped the fragment in a document")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(frag), "<section") {
+		t.Fatalf("HTMX response is not the bare ledger section: %.60q", frag)
+	}
+	if !strings.Contains(frag, `id="ledger"`) {
+		t.Error("HTMX response is missing the ledger section")
+	}
+}
+
+func TestDialogTriggersResolveOnMastheadPages(t *testing.T) {
+	srv := newTestWeb(t, config.Umami{}, ratelimit.New(1000, 100))
+	pattern := regexp.MustCompile(`data-dialog-open="([^"]+)"`)
+
+	for _, path := range []string{"/", "/entries", "/stats"} {
+		status, _, body := fetch(t, srv, path, nil)
+		if status != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, status)
+		}
+		for _, id := range []string{"add-dialog", "info-dialog"} {
+			if !strings.Contains(body, `id="`+id+`"`) {
+				t.Errorf("%s does not render #%s", path, id)
+			}
+		}
+		matches := pattern.FindAllStringSubmatch(body, -1)
+		if len(matches) == 0 {
+			t.Fatalf("%s has no dialog triggers", path)
+		}
+		for _, match := range matches {
+			target := strings.TrimPrefix(match[1], "#")
+			if target == "" || !strings.Contains(body, `id="`+target+`"`) {
+				t.Errorf("%s: dialog trigger %q has no matching dialog", path, match[1])
+			}
+		}
+	}
+}
+
+func TestPublicDocumentsExposeSkipLinkMainAndManifest(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	entry, err := st.CreateEntry(t.Context(), "structure", "landmark", "", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	mainPattern := regexp.MustCompile(`<main\b`)
+	paths := []string{"/", "/entries", "/stats", "/e/" + strconv.FormatInt(entry.ID, 10)}
+
+	for _, path := range paths {
+		status, _, body := fetch(t, srv, path, nil)
+		if status != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, status)
+		}
+		if got := len(mainPattern.FindAllString(body, -1)); got != 1 {
+			t.Errorf("%s has %d main elements, want 1", path, got)
+		}
+		if !strings.Contains(body, `id="content"`) {
+			t.Errorf("%s main is missing id=content", path)
+		}
+		skip := strings.Index(body, `class="skip-link"`)
+		main := strings.Index(body, "<main")
+		if skip < 0 {
+			t.Errorf("%s has no skip link", path)
+			continue
+		}
+		if main < 0 || skip > main {
+			t.Errorf("%s skip link does not precede main", path)
+		}
+		if !strings.Contains(body, `rel="manifest" href="/site.webmanifest"`) {
+			t.Errorf("%s is missing the manifest link", path)
+		}
+	}
+}
+
+func TestStatsChartsExposeTableAlternatives(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	if _, err := st.CreateEntry(t.Context(), "grafiek", "chart", "Aaa", nil); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+
+	status, _, body := fetch(t, srv, "/stats", nil)
+	if status != http.StatusOK {
+		t.Fatalf("stats status = %d, want 200", status)
+	}
+	yearRows := strings.Count(body, `class="year-row"`)
+	yearBars := strings.Count(body, `class="bar-col`)
+	if yearRows == 0 || yearRows != yearBars {
+		t.Errorf("year table rows = %d, bars = %d; want equal and non-zero", yearRows, yearBars)
+	}
+	personRows := strings.Count(body, `class="person-row"`)
+	personBars := strings.Count(body, `class="person-bar"`)
+	if personRows == 0 || personRows != personBars {
+		t.Errorf("person table rows = %d, bars = %d; want equal and non-zero", personRows, personBars)
+	}
+	if !regexp.MustCompile(`<ol class="bars[^>]*aria-hidden="true"`).MatchString(body) {
+		t.Error("year bar list is not marked aria-hidden")
+	}
+	if !strings.Contains(body, `<ol class="person-bars" aria-hidden="true">`) {
+		t.Error("person bar list is not marked aria-hidden")
+	}
+	if !strings.Contains(body, "<caption>Entries per year</caption>") || !strings.Contains(body, "<caption>Slips per person</caption>") {
+		t.Error("chart tables are missing captions")
+	}
+}
+
+func TestDiscoverabilityRoutes(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+	entry, err := st.CreateEntry(t.Context(), "sitemap", "entry", "", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	permalink := "/e/" + strconv.FormatInt(entry.ID, 10)
+
+	status, headers, robots := fetch(t, srv, "/robots.txt", nil)
+	if status != http.StatusOK {
+		t.Fatalf("robots status = %d", status)
+	}
+	if got := headers.Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Fatalf("robots content type = %q", got)
+	}
+	if !strings.Contains(robots, "Disallow: /admin") {
+		t.Error("robots has no /admin disallow")
+	}
+	if !strings.Contains(robots, "Sitemap: "+srv.URL+"/sitemap.xml") {
+		t.Errorf("robots sitemap line is not absolute: %q", robots)
+	}
+
+	status, headers, sitemap := fetch(t, srv, "/sitemap.xml", nil)
+	if status != http.StatusOK {
+		t.Fatalf("sitemap status = %d", status)
+	}
+	if got := headers.Get("Content-Type"); !strings.HasPrefix(got, "application/xml") {
+		t.Fatalf("sitemap content type = %q", got)
+	}
+	if !strings.HasPrefix(sitemap, "<?xml") {
+		t.Fatal("sitemap lacks the XML declaration")
+	}
+	for _, loc := range []string{srv.URL + "/", srv.URL + "/stats", srv.URL + permalink} {
+		if !strings.Contains(sitemap, "<loc>"+loc+"</loc>") {
+			t.Errorf("sitemap is missing <loc>%s</loc>", loc)
+		}
+	}
+
+	status, headers, rawManifest := fetch(t, srv, "/site.webmanifest", nil)
+	if status != http.StatusOK {
+		t.Fatalf("manifest status = %d", status)
+	}
+	if got := headers.Get("Content-Type"); !strings.HasPrefix(got, "application/manifest+json") {
+		t.Fatalf("manifest content type = %q", got)
+	}
+	var manifest struct {
+		Name            string `json:"name"`
+		ShortName       string `json:"short_name"`
+		StartURL        string `json:"start_url"`
+		Display         string `json:"display"`
+		ThemeColor      string `json:"theme_color"`
+		BackgroundColor string `json:"background_color"`
+		Icons           []struct {
+			Src   string `json:"src"`
+			Sizes string `json:"sizes"`
+			Type  string `json:"type"`
+		} `json:"icons"`
+	}
+	if err := json.Unmarshal([]byte(rawManifest), &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	if manifest.Name == "" || manifest.ShortName == "" || manifest.StartURL != "/" || manifest.Display == "" {
+		t.Fatalf("manifest core fields incomplete: %+v", manifest)
+	}
+	if manifest.ThemeColor != "#f4eee1" || manifest.BackgroundColor != "#f4eee1" {
+		t.Fatalf("manifest colours = %q/%q, want #f4eee1", manifest.ThemeColor, manifest.BackgroundColor)
+	}
+	if len(manifest.Icons) != 2 {
+		t.Fatalf("manifest icons = %d, want 2", len(manifest.Icons))
+	}
+	for _, icon := range manifest.Icons {
+		status, headers, _ := fetch(t, srv, icon.Src, nil)
+		if status != http.StatusOK {
+			t.Errorf("icon %s status = %d", icon.Src, status)
+		}
+		if got := headers.Get("Content-Type"); !strings.HasPrefix(got, "image/") {
+			t.Errorf("icon %s content type = %q", icon.Src, got)
+		}
+	}
+
+	// A deleted (soft-deleted) entry leaves the sitemap.
+	if _, err := st.SoftDeleteEntries(t.Context(), []int64{entry.ID}); err != nil {
+		t.Fatalf("SoftDeleteEntries: %v", err)
+	}
+	_, _, sitemap = fetch(t, srv, "/sitemap.xml", nil)
+	if strings.Contains(sitemap, srv.URL+permalink) {
+		t.Error("sitemap still lists a deleted entry")
+	}
+}
+
+func TestDiscoverabilityRoutesCarrySecurityHeaders(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "web-secure.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, func() config.Webhook { return config.Webhook{} }, false, "", discardLogger())
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+	mux := http.NewServeMux()
+	w.Register(mux)
+	srv := httptest.NewServer(httpx.SecurityHeadersFunc(func(*http.Request) string {
+		return "default-src 'self'"
+	})(mux))
+	t.Cleanup(srv.Close)
+
+	for _, path := range []string{"/robots.txt", "/sitemap.xml", "/site.webmanifest"} {
+		_, headers, _ := fetch(t, srv, path, nil)
+		if got := headers.Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("%s X-Frame-Options = %q, want DENY", path, got)
+		}
+		if got := headers.Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'self'") {
+			t.Errorf("%s CSP = %q", path, got)
+		}
+	}
+}
+
+func TestDiscoverabilityHonoursPublicBaseURL(t *testing.T) {
+	srv, _ := newTestWebWithBaseURL(t, "https://vandyke.example.com")
+
+	_, _, robots := fetch(t, srv, "/robots.txt", nil)
+	if !strings.Contains(robots, "Sitemap: https://vandyke.example.com/sitemap.xml") {
+		t.Errorf("robots ignores PUBLIC_BASE_URL: %q", robots)
+	}
+	_, _, sitemap := fetch(t, srv, "/sitemap.xml", nil)
+	for _, loc := range []string{"https://vandyke.example.com/", "https://vandyke.example.com/stats"} {
+		if !strings.Contains(sitemap, "<loc>"+loc+"</loc>") {
+			t.Errorf("sitemap ignores PUBLIC_BASE_URL, missing %q", loc)
+		}
+	}
+}
+
+func TestLedgerHighlightsIncludedTermsOnly(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	if _, err := st.CreateEntry(t.Context(), "highlightprobe", "the highlightprobe correction", "Alice", nil); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	hx := map[string]string{"HX-Request": "true"}
+
+	_, _, body := fetch(t, srv, "/entries?q=highlightprobe&per_page=100", hx)
+	if got := strings.Count(body, "<mark>highlightprobe</mark>"); got != 2 {
+		t.Fatalf("marked occurrences = %d, want 2 in %s", got, body)
+	}
+
+	// An excluded term is parsed out of Include, so the renderer cannot mark it.
+	parsed := searchquery.Parse("feature -feutenreus")
+	rendered := string(markMatches("feature and feutenreus together", parsed.Include))
+	if strings.Contains(rendered, "<mark>feutenreus</mark>") {
+		t.Fatalf("excluded term was marked: %s", rendered)
+	}
+	if !strings.Contains(rendered, "<mark>feature</mark>") {
+		t.Fatalf("included term lost its mark: %s", rendered)
+	}
+
+	_, _, off := fetch(t, srv, "/entries?q=highlightprobe&highlight=0&per_page=100", hx)
+	if strings.Contains(off, "<mark>") {
+		t.Fatalf("highlight=0 still rendered marks: %s", off)
+	}
+	if !strings.Contains(off, "highlightprobe") {
+		t.Fatal("highlight=0 dropped the entry text")
+	}
+	if !strings.Contains(off, "highlight=0") {
+		t.Fatal("highlight=0 was not persisted in generated links")
+	}
+}
+
+func TestLedgerHighlightEscapesQueryMarkup(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	if _, err := st.CreateEntry(t.Context(), "alert<script>probe", "a slip with markup", "", nil); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+
+	_, _, body := fetch(t, srv, "/entries?q="+url.QueryEscape(`"<script>"`)+"&per_page=100",
+		map[string]string{"HX-Request": "true"})
+	if strings.Contains(body, "<script") {
+		t.Fatalf("query markup became a script element: %s", body)
+	}
+	if !strings.Contains(body, "<mark>&lt;script&gt;</mark>") {
+		t.Fatalf("matched markup was not escaped inside the mark: %s", body)
+	}
+}
+
+func TestLedgerDateRangeFilter(t *testing.T) {
+	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
+
+	entry, err := st.CreateEntry(t.Context(), "datumprobe", "a dated slip", "", nil)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	created, err := time.Parse("2006-01-02", "1992-03-04")
+	if err != nil {
+		t.Fatalf("parse date: %v", err)
+	}
+	if _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
+		ID: entry.ID, Word: "datumprobe", Meaning: "a dated slip", CreatedAt: created,
+	}); err != nil {
+		t.Fatalf("UpdateEntry: %v", err)
+	}
+
+	hx := map[string]string{"HX-Request": "true"}
+	_, _, body := fetch(t, srv, "/entries?from=1992-03-01&to=1992-03-31&per_page=100", hx)
+	if !strings.Contains(body, "datumprobe") {
+		t.Fatal("in-range entry missing")
+	}
+	if !strings.Contains(body, "from 1992-03-01") || !strings.Contains(body, "to 1992-03-31") {
+		t.Fatalf("active range not shown in the meta line: %s", body)
+	}
+
+	_, _, outside := fetch(t, srv, "/entries?from=1992-04-01&to=1992-04-30&per_page=100", hx)
+	if strings.Contains(outside, "datumprobe") {
+		t.Fatal("out-of-range entry returned")
+	}
+
+	// A malformed bound is ignored rather than failing the page.
+	if status, _, _ := fetch(t, srv, "/entries?from=not-a-date", hx); status != http.StatusOK {
+		t.Fatalf("malformed web date status = %d, want 200", status)
+	}
+}
+
+func TestWebhookDispatchDoesNotBlockCreate(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "web-webhook.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	bodies := make(chan []byte, 1)
+	var once sync.Once
+	receiver := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- body
+		once.Do(func() { close(started) })
+		<-release
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer receiver.Close()
+	defer close(release)
+
+	w, err := New(st, ratelimit.New(1000, 100),
+		func() config.Umami { return config.Umami{} },
+		func() config.Webhook { return config.Webhook{URL: receiver.URL, Secret: "s3cret"} },
+		false, "", discardLogger())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	w.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	type result struct {
+		status int
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := client.PostForm(srv.URL+"/entries", url.Values{
+			"word": {"webhookprobe"}, "meaning": {"payload probe"}, "person": {"Alice"},
+		})
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		_ = resp.Body.Close()
+		done <- result{status: resp.StatusCode}
+	}()
+
+	// The receiver is still blocked, so a synchronous dispatch would hang here.
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("create: %v", got.err)
+		}
+		if got.status != http.StatusSeeOther {
+			t.Fatalf("create status = %d, want 303", got.status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("entry creation blocked on the webhook receiver")
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("webhook receiver was never contacted")
+	}
+
+	select {
+	case body := <-bodies:
+		var payload webhook.Payload
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload.Event != "entry.created" || payload.Word != "webhookprobe" || payload.Person != "Alice" {
+			t.Fatalf("payload = %+v", payload)
+		}
+		if payload.ID < 1 || !strings.HasSuffix(payload.URL, "/e/"+strconv.FormatInt(payload.ID, 10)) {
+			t.Fatalf("payload url = %q for id %d", payload.URL, payload.ID)
+		}
+		if !strings.HasPrefix(payload.URL, srv.URL) {
+			t.Fatalf("payload url = %q, want the request host %q", payload.URL, srv.URL)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no payload received")
+	}
+}
+
+type capturedLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (c *capturedLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (c *capturedLog) Handle(_ context.Context, record slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.records = append(c.records, record.Clone())
+	return nil
+}
+
+func (c *capturedLog) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *capturedLog) WithGroup(string) slog.Handler      { return c }
+
+func (c *capturedLog) warnings() []slog.Record {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []slog.Record
+	for _, record := range c.records {
+		if record.Level >= slog.LevelWarn {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+func TestWebhookFailureDoesNotAffectCreate(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "web-webhook-fail.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	receiver := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer receiver.Close()
+
+	logs := &capturedLog{}
+	w, err := New(st, ratelimit.New(1000, 100),
+		func() config.Umami { return config.Umami{} },
+		func() config.Webhook { return config.Webhook{URL: receiver.URL} },
+		false, "", slog.New(logs))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	w.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.PostForm(srv.URL+"/entries", url.Values{
+		"word": {"mislukt"}, "meaning": {"failed delivery"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create status = %d, want 303", resp.StatusCode)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(logs.warnings()) > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("webhook failure was not logged at warn level")
 }

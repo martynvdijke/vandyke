@@ -2,13 +2,14 @@
 {{template "admin-nav" .}}
 <div class="admin-heading">
   <div>
-    <p class="eyebrow">Analytics</p>
-    <h1>Umami settings</h1>
-    <p class="admin-lede">Point the ledger at your self-hosted Umami instance. Saved values apply immediately, including the Content-Security-Policy.</p>
+    <p class="eyebrow">Configuration</p>
+    <h1>Settings</h1>
+    <p class="admin-lede">Analytics and outbound notifications. Saved values apply immediately; secrets are write-only and never rendered back.</p>
   </div>
 </div>
 
 {{if .Saved}}<p class="admin-flash" role="status">Settings saved.</p>{{end}}
+{{if .Rebuilt}}<p class="admin-flash" role="status">Search index rebuilt from the live ledger entries.</p>{{end}}
 {{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
 
 <section class="admin-card admin-settings-card">
@@ -46,5 +47,58 @@
       <div><dt>UMAMI_DOMAINS</dt><dd>{{if .Env.Domains}}{{.Env.Domains}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
     </dl>
   </div>
+</section>
+
+<section class="admin-card admin-settings-card">
+  <h2>Webhook</h2>
+  <p class="admin-lede">When a target is configured the server posts one <code>entry.created</code> event after each successful addition. Delivery is best effort: it never delays the response and is not retried, so a receiver should de-duplicate on <code>id</code>.</p>
+  <form method="post" action="/admin/settings" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="settings_form" value="webhook">
+    <label class="field">
+      <span class="field-label">Webhook URL</span>
+      <input type="url" name="webhook_url" value="{{.WebhookURL}}" placeholder="{{.WebhookEnvURL}}" autocomplete="off">
+      <span class="field-hint">Receives a JSON <code>POST</code>. Leave empty to disable dispatch. Falls back to <code>LEDGER_WEBHOOK_URL</code> when no stored value exists.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Signing secret <span class="field-optional">write-only</span></span>
+      <input type="password" name="webhook_secret" value="" autocomplete="new-password">
+      <span class="field-hint">{{if .WebhookSecretSet}}A secret is configured. Leave blank to keep it. {{else}}No secret is configured; payloads are sent unsigned. {{end}}When set, the body is signed as <code>X-VanDyke-Signature: sha256=&lt;hex&gt;</code>. Falls back to <code>LEDGER_WEBHOOK_SECRET</code>.</span>
+    </label>
+    {{if .WebhookSecretSet}}
+    <label class="filter-toggle">
+      <input type="checkbox" name="webhook_clear_secret" value="1">
+      <span>Clear the stored secret</span>
+    </label>
+    {{end}}
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Save webhook</button>
+    </div>
+  </form>
+  <form method="post" action="/admin/settings/webhook/test" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-form-actions">
+      <button class="btn btn-ghost" type="submit">Send test event</button>
+    </div>
+  </form>
+  {{if .WebhookResult}}<p class="admin-flash" role="status">{{.WebhookResult}}</p>{{end}}
+  <div class="admin-env-note">
+    <h2>Environment fallback</h2>
+    <dl>
+      <div><dt>LEDGER_WEBHOOK_URL</dt><dd>{{if .WebhookEnvURL}}{{.WebhookEnvURL}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>LEDGER_WEBHOOK_SECRET</dt><dd>{{if .WebhookEnvSecretSet}}<span class="admin-muted">configured</span>{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="admin-card admin-settings-card">
+  <h2>Search index</h2>
+  <p class="admin-lede">The trigram search index is derived from the ledger and normally stays in step on every add, edit, delete and restore. Rebuild it if a search result looks stale; trashed entries stay excluded.</p>
+  <form method="post" action="/admin/search/rebuild" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Rebuild search index</button>
+    </div>
+  </form>
 </section>
 {{template "admin-foot" .}}{{end}}

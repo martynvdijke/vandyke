@@ -72,8 +72,27 @@
       return;
     }
 
-    var single = event.target.closest("[data-delete-id]");
-    if (single) {
+    var purge = event.target.closest("[data-confirm-purge]");
+    if (purge) {
+      var purgeForm = purge.form || purge.closest("form");
+      var purgeIDs = [];
+      if (purgeForm) {
+        new FormData(purgeForm).getAll("ids").forEach(function (id) {
+          purgeIDs.push(id);
+        });
+      }
+      if (!purgeIDs.length) {
+        event.preventDefault();
+        return;
+      }
+      var what = purgeIDs.length === 1 ? "this entry" : purgeIDs.length + " selected entries";
+      if (!window.confirm("Permanently purge " + what + "? The photo is deleted too and this cannot be undone.")) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    var single = event.target.closest("[data-delete-id]");    if (single) {
       var label = single.getAttribute("data-delete-label") || "this entry";
       if (!window.confirm("Delete " + label + "?")) return;
       submitDelete([single.getAttribute("data-delete-id")]);

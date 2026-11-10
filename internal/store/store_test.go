@@ -177,8 +177,8 @@ func TestSearchFiltersYearsAndIndexUpdates(t *testing.T) {
 		t.Fatalf("new search term does not match after update: %+v", page)
 	}
 
-	if _, err := st.DeleteEntries(ctx, []int64{typoID, otherID}); err != nil {
-		t.Fatalf("DeleteEntries: %v", err)
+	if _, err := st.SoftDeleteEntries(ctx, []int64{typoID, otherID}); err != nil {
+		t.Fatalf("SoftDeleteEntries: %v", err)
 	}
 	page, err = st.ListEntries(ctx, ListParams{Query: "nieuw"})
 	if err != nil {
@@ -803,7 +803,7 @@ func TestEntryPersonCreateFilterUpdateAndList(t *testing.T) {
 	}
 }
 
-func TestDeleteEntriesCascadeAndSettings(t *testing.T) {
+func TestSoftDeleteEntriesRetainPhotoAndSettings(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 	clearEntries(t, st)
@@ -816,15 +816,25 @@ func TestDeleteEntriesCascadeAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	n, err := st.DeleteEntries(ctx, []int64{entry.ID, entry.ID, 0})
+	n, err := st.SoftDeleteEntries(ctx, []int64{entry.ID, entry.ID, 0})
 	if err != nil {
-		t.Fatalf("DeleteEntries: %v", err)
+		t.Fatalf("SoftDeleteEntries: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("deleted = %d, want 1", n)
+		t.Fatalf("soft deleted = %d, want 1", n)
+	}
+	// A trashed entry keeps its photo until it is purged.
+	if _, err := st.GetEntryPhoto(ctx, entry.ID); err != nil {
+		t.Fatalf("photo after soft delete = %v, want retained", err)
+	}
+	if _, err := st.GetEntry(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetEntry after soft delete = %v, want ErrNotFound", err)
+	}
+	if _, err := st.PurgeEntries(ctx, []int64{entry.ID}); err != nil {
+		t.Fatalf("PurgeEntries: %v", err)
 	}
 	if _, err := st.GetEntryPhoto(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("photo after delete = %v, want ErrNotFound", err)
+		t.Fatalf("photo after purge = %v, want ErrNotFound", err)
 	}
 
 	if err := st.SetSettings(ctx, map[string]string{"umami.url": "https://u.example/script.js"}); err != nil {

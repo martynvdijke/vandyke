@@ -25,6 +25,16 @@ type OIDC struct {
 	RedirectURL  string
 }
 
+// Webhook holds the optional outbound entry-created webhook. An empty URL
+// disables dispatch; an empty Secret disables signing.
+type Webhook struct {
+	URL    string
+	Secret string
+}
+
+// Enabled reports whether a webhook target is configured.
+func (w Webhook) Enabled() bool { return strings.TrimSpace(w.URL) != "" }
+
 // Enabled reports whether OIDC login is configured.
 func (o OIDC) Enabled() bool { return o.Issuer != "" && o.ClientID != "" }
 
@@ -55,6 +65,7 @@ type Config struct {
 	AdminLoginRateBurst     int
 	PublicBaseURL           string
 	Umami                   Umami
+	Webhook                 Webhook
 	OIDC                    OIDC
 }
 
@@ -68,6 +79,10 @@ func Load() (Config, error) {
 			URL:       os.Getenv("UMAMI_URL"),
 			WebsiteID: os.Getenv("UMAMI_WEBSITE_ID"),
 			Domains:   os.Getenv("UMAMI_DOMAINS"),
+		},
+		Webhook: Webhook{
+			URL:    os.Getenv("LEDGER_WEBHOOK_URL"),
+			Secret: os.Getenv("LEDGER_WEBHOOK_SECRET"),
 		},
 		OIDC: OIDC{
 			Issuer:       os.Getenv("OIDC_ISSUER"),

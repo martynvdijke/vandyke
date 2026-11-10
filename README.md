@@ -28,9 +28,18 @@ services required.
   public ledger gets a resized display image and a small thumbnail. EXIF
   metadata is removed and oversized dimensions are rejected.
 - **Partial search and filters** — SQLite FTS5 trigram search finds fragments
-  like `euten` inside `feutenreus`; filter by photo and year.
+  like `euten` inside `feutenreus`, across the misspelling, the correction and
+  the person. Quote a phrase, prefix a term with `-` to exclude it, filter by
+  photo, year or an inclusive `from`/`to` date range, and see matches marked in
+  the ledger.
 - **Stable permalinks** — every entry has a page at `/e/{id}` with Open Graph
   and Twitter metadata for clean link previews, plus a copy-link button.
+- **Atom feed** — `GET /feed.xml` publishes the newest entries as Atom 1.0 with
+  a `limit` parameter, a strong ETag and autodiscovery from every page, so a
+  reader or RSS client can subscribe without polling the API.
+- **Optional outbound webhook** — post one signed `entry.created` JSON event to
+  a target of your choice after each addition. Delivery is best effort and never
+  delays the response.
 - **Admin ledger** — sign in to edit every field, replace or remove photos,
   correct logged dates, and delete entries individually or in bulk. Public
   additions stay open; only editing and deletion require an admin.
@@ -98,6 +107,8 @@ Compose). See [`.env.example`](.env.example).
 | `UMAMI_URL` | *(empty)* | Full URL of the self-hosted tracker, e.g. `https://umami.example.com/script.js`. |
 | `UMAMI_WEBSITE_ID` | *(empty)* | Umami website UUID. Analytics is enabled only when both are set. |
 | `UMAMI_DOMAINS` | *(empty)* | Optional comma-separated hostnames passed to `data-domains`. |
+| `LEDGER_WEBHOOK_URL` | *(empty)* | Optional target for the `entry.created` webhook. Empty disables dispatch. |
+| `LEDGER_WEBHOOK_SECRET` | *(empty)* | Optional HMAC-SHA256 key for `X-VanDyke-Signature`. Empty sends unsigned payloads. |
 | `ADMIN_SETUP_TOKEN` | *(empty)* | Optional token required by `/admin/setup`. Without it the first visitor can claim a fresh instance. |
 | `ADMIN_LOGIN_RATE_PER_MINUTE` | `10` | Login attempts allowed per IP per minute. |
 | `ADMIN_LOGIN_RATE_BURST` | `5` | Short-term login burst allowance per IP. |
@@ -117,10 +128,10 @@ stable envelope:
 
 | Method & path | Description |
 | --- | --- |
-| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`), `person` (exact name, case-insensitive). |
-| `GET /api/v1/entries/{id}` | Single entry. `404` when missing. |
+| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`), `from`/`to` (`YYYY-MM-DD`, inclusive), `person` (exact name, case-insensitive). A malformed `from` or `to` answers `400 invalid_date`. |
+| `GET /api/v1/entries/{id}` | Single entry. `404` when missing or in the trash. |
 | `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "...", "person": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning`, optional `person` and an optional `photo` file. `person` is the slip's author and may be omitted. `201` with `Location`; `409` when the entry already exists; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
-| `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo. The original upload is available only to admins. |
+| `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo or is in the trash. The original upload is available only to admins. |
 | `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`, `with_photo`, `by_year` (`[{"year": 2026, "count": 12}]`) and `top_persons` (`[{"person": "Marieke", "count": 4}]`, the eight busiest names). |
 | `GET /api/v1/persons` | Distinct attributed persons with counts: `{"items": [{"person": "M. van Dijke", "count": 12}], "total": 3}`, ordered case-insensitively. Unattributed entries are not listed. |
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
@@ -152,6 +163,48 @@ JPEG without EXIF metadata; the original is retained for admin download. Entries
 return `photo_url` when they have a photo. Duplicates are allowed, exactly as on
 the original site.
 
+## Search
+
+`GET /entries` and `GET /api/v1/entries` share one search grammar and one
+trigram index over the misspelling, the correction and the person:
+
+- Whitespace-separated terms are all required (AND): `feature euten`.
+- `"..."` matches an exact phrase: `"van Dijke"`.
+- A leading `-` excludes a term or phrase: `feature -feutenreus`.
+- `from` and `to` take `YYYY-MM-DD` and are inclusive. Either may be supplied
+  alone, and both combine with `year` (the result is the intersection).
+- Any term shorter than three runes, or a query made only of exclusions, is
+  answered by a substring `LIKE` scan over the same three fields; this is the
+  same fallback the ledger has always used for short fragments.
+
+The HTML ledger marks included matches with `<mark>`; all entry text is escaped
+before marking, and the query itself can never become markup. Add `highlight=0`
+to `GET /entries` for the unmarked text. The JSON API always returns the stored
+`word`, `meaning` and `person` unchanged.
+
+The trigram index is derived data, kept up to date on every add, edit, delete,
+restore, import and seed. An admin can regenerate it from the live entries with
+**Rebuild search index** on `/admin/settings`; trashed entries are skipped until
+they are restored.
+
+## Atom feed
+
+`GET /feed.xml` serves the newest live entries as Atom 1.0. Each entry uses
+`{base}/e/{id}` as both its `id` and `link`, the misspelling as `title`, the
+correction as `summary`, the logged date as `updated`, and the person as
+`author` when one is recorded. The feed-level author names the ledger, and
+trashed entries are never included.
+
+- `limit` defaults to 50 and is capped at 100. A non-numeric or sub-1 value uses
+  the default; a larger one is capped. The cap matches `store.MaxPerPage`.
+- Responses carry a strong `ETag` derived from the newest entry id and the
+  number of rows, plus `Cache-Control: public, max-age=60`. A matching
+  `If-None-Match` answers `304` with no body.
+- Every public page head carries
+  `<link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">`.
+- Absolute URLs follow `PUBLIC_BASE_URL` and otherwise the request scheme and
+  host, exactly like permalinks.
+
 ## Permalinks
 
 Every entry has a stable public page at `/e/{id}`. The page shows the full
@@ -159,6 +212,32 @@ entry, its date and photo, and includes Open Graph/Twitter metadata for link
 previews plus a copy-link button. Entry numbers in the ledger link to their
 permalink. Set `PUBLIC_BASE_URL` behind a reverse proxy so canonical and social
 URLs use the public hostname; otherwise they are derived from the request.
+
+## Discoverability and accessibility
+
+The binary serves its own crawler and browser metadata, all through the same
+middleware as every other route:
+
+- `GET /robots.txt` — `text/plain`; disallows `/admin` and names the sitemap.
+- `GET /sitemap.xml` — `application/xml`; the home page, `/stats` and one
+  `/e/{id}` permalink per live entry, all absolute URLs.
+- `GET /feed.xml` — `application/atom+xml; charset=utf-8`; the newest live
+  entries, newest first.
+- `GET /site.webmanifest` — `application/manifest+json`; name, short name,
+  `start_url` `/`, `standalone` display, `#f4eee1` theme/background colours and
+  the existing favicon and Apple touch icon.
+
+Sitemap and robots URLs follow `PUBLIC_BASE_URL` when it is set and otherwise
+the request scheme and host, exactly like permalink canonicals. Trashed entries
+are absent from the sitemap.
+
+The public ledger works without JavaScript. `GET /entries` returns a complete
+document when requested directly (sort, pager and "Clear search" links are plain
+navigations), and the bare ledger fragment only when HTMX asks for it. Every
+page carries a skip link to `main#content`, the theme toggle reports
+`aria-pressed`, dialog triggers report `aria-expanded`, the statistics charts
+have visually hidden tables as text alternatives, and the admin login, setup and
+edit forms associate their hints and error messages with the inputs.
 
 ## Admin and authentication
 
@@ -172,7 +251,123 @@ admin account at `/admin`.
    and are protected by an `HttpOnly`, `SameSite=Lax` cookie and a CSRF token
    on every mutating form.
 3. Edit an entry with **Edit** in the admin ledger. Word, meaning, logged date
-   and photo can all be changed; deleting an entry also deletes its photo.
+   and photo can all be changed. Deleting an entry moves it to the trash and
+   keeps its photo until you restore or purge it.
+
+### Roles and admin accounts
+
+Each admin is an **owner** or an **editor**. Owners can do everything an editor
+can, plus delete entries, purge the trash, manage admins and read the audit
+trail. Editors can edit entries, restore trashed entries and change settings.
+
+- `/admin/admins` (owners only) lists every account and creates, promotes,
+  demotes, disables, re-enables, deletes and resets the password of another
+  admin.
+- The last enabled owner can never be demoted, disabled or deleted: the server
+  refuses with `409`. Promote or enable another owner first. Owners also cannot
+  demote, disable or delete their own account.
+- Disabling is reversible and takes effect immediately: the disabled admin is
+  refused at sign-in and any session cookie they already hold is rejected on the
+  next request.
+- `/admin/account` changes your own password (current password required, at
+  least 12 characters) and signs out your other sessions.
+
+### Sessions and the audit trail
+
+- `/admin/sessions` lists your sessions with a reference, creation and expiry
+  time, and lets you revoke one session or every other session. An owner may
+  revoke any reference; an editor can only revoke their own.
+- `/admin/audit` (owners only) is a read-only, paginated trail of sign-ins,
+  entry changes, settings saves, admin changes and session revocations. It
+  records actor, action, subject, client IP and time, and never stores passwords,
+  hashes or session tokens. Filter it by action, actor and date range. No route
+  edits or deletes audit rows.
+
+### Trash
+
+Deleting an entry in the admin ledger or with the bulk delete form moves it to
+`/admin/trash`; nothing is removed from the database yet. Trashed entries are
+hidden from the public site, `/api/v1`, search, statistics and `/e/{id}`, which
+all behave as if the entry does not exist, while an admin can still open it to
+inspect it. Its search-index row is removed on delete and written again on
+restore, so search never has to trust the trash flag alone.
+
+- `GET /admin/trash` lists trashed entries with their logged and deletion
+  times, newest deletion first, and shows the current trashed count.
+- **Restore** clears the deletion marker and puts the entry back on every read
+  path with its original photo. Restore is idempotent.
+- **Purge** permanently deletes the entry, its search-index row and its photo.
+  Use it only when you are sure the entry is no longer needed.
+
+Both actions work per row or on a selection, accept at most 100 ids per
+request, and are CSRF-protected. There is no retention job: an entry stays in
+the trash until an admin explicitly purges it. A trashed entry still occupies
+its case-insensitive `(misspelling, correction)` slot, so re-adding the same
+pair fails as a duplicate until the old row is purged.
+
+### Webhooks
+
+Set `LEDGER_WEBHOOK_URL`, or store `webhook.url` on `/admin/settings`, to have
+the server post one JSON event after each successful entry creation from the web
+form or `POST /api/v1/entries`:
+
+```json
+{
+  "event": "entry.created",
+  "id": 123,
+  "word": "feuten",
+  "meaning": "feature",
+  "person": "M. van Dijke",
+  "created_at": "2026-11-10T09:00:00Z",
+  "url": "https://vandyke.example.com/e/123"
+}
+```
+
+- The request is `POST` with `Content-Type: application/json`. `person` is an
+  empty string when the entry is unattributed, and `url` is the absolute
+  permalink.
+- With `LEDGER_WEBHOOK_SECRET` or the `webhook.secret` setting configured, the
+  exact body bytes are signed as `X-VanDyke-Signature: sha256=<lowercase hex>`
+  using HMAC-SHA256. The header is omitted when no secret is effective.
+- Dispatch is fire-and-forget: the create response is not delayed or changed,
+  and a failure is only logged at warn level.
+- **Delivery is best effort.** There are no retries, no delivery history and no
+  at-least-once guarantee. A receiver that must be certain should reconcile
+  against `GET /api/v1/entries` or the Atom feed, and should de-duplicate on
+  `id` because the same event may arrive more than once.
+- Runtime settings win over the environment. The secret is write-only: the admin
+  page reports configured/unconfigured, a blank secret field keeps the stored
+  value, and the clear control removes it.
+- **Send test event** on `/admin/settings` posts the same payload shape for the
+  newest entry (or zeroed fields on an empty ledger) and waits up to five
+  seconds to report the receiver's HTTP status or a sanitised error.
+
+### Export
+
+Every export route requires an admin session and downloads as an attachment
+with `Cache-Control: no-store`:
+
+- `GET /admin/export.json` — versioned JSON envelope with `format_version` `1`,
+  `exported_at`, `entry_count`, `photo_count` and one object per entry.
+- `GET /admin/export.csv` — RFC 4180 CSV with a header row naming the same
+  fields as the JSON export.
+- `GET /admin/export.zip` — streaming archive with `manifest.json`,
+  `entries.json` and `photos/{id}.jpg`.
+
+The ZIP carries the 1600 px display derivative, not the original photo. Use the
+per-photo admin download when the original bytes are required.
+
+### Import
+
+`GET /admin/import` uploads a JSON export or a ZIP archive. `mode=preview`
+classifies every row without writing (would-create, would-skip, would-conflict);
+`mode=apply` writes the whole file in one transaction. `conflict=skip` (default)
+leaves a matching `(word, meaning)` row untouched; `conflict=replace` updates
+its `person`, `created_at` and photo but never its word or meaning. An error on
+any row rolls the whole file back.
+
+Caps: 64 MiB per request, 20,000 entries and 10 MiB per photo. Requests over a
+cap are refused with 413.
 
 ### OIDC
 
@@ -275,14 +470,17 @@ and a CSP tailored to the effective Umami settings.
 go test ./...
 ```
 
-The suite covers the store (seeding, FTS partial search, filters, search-index
-updates, sorting, pagination, validation, stats, admin/session lifecycle, entry
-edits and bulk deletes, settings), photo derivatives and backfill, password
+The suite covers the store (seeding, FTS partial search, person and date-range
+search, query grammar, search-index updates and rebuild, sorting, pagination,
+validation, stats, admin/session lifecycle, entry edits and bulk deletes,
+settings), photo derivatives and backfill, password
 hashing and OIDC discovery/token verification, the rate limiter, the JSON API,
 the admin flows (setup, login, CSRF, edit, delete, original photo download,
-Umami settings), and the public web layer (partial rendering, HTMX flows, no-JS
-flows, permalinks and Open Graph metadata, rate-limit errors, Umami injection,
-cache headers).
+Umami and webhook settings, webhook test-fire), the Atom feed (validity,
+escaping, ordering, limit, ETag/304, trash exclusion, autodiscovery), webhook
+payloads and HMAC signing, and the public web layer (partial rendering, HTMX
+flows, no-JS flows, permalinks and Open Graph metadata, rate-limit errors, Umami
+injection, cache headers).
 
 The TRMNL transforms have their own stdlib-only Python tests:
 

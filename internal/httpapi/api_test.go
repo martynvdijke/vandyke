@@ -2,7 +2,10 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -17,7 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/store"
@@ -36,7 +41,7 @@ func newTestAPI(t *testing.T, limiter *ratelimit.Limiter) (*httptest.Server, *st
 	t.Cleanup(func() { _ = st.Close() })
 
 	mux := http.NewServeMux()
-	New(st, limiter, false, discardLogger()).Register(mux)
+	New(st, limiter, false, "", func() config.Webhook { return config.Webhook{} }, discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, st
@@ -487,7 +492,7 @@ func TestSecurityHeadersAppliedByMiddleware(t *testing.T) {
 	defer st.Close()
 
 	mux := http.NewServeMux()
-	New(st, ratelimit.New(1000, 100), false, discardLogger()).Register(mux)
+	New(st, ratelimit.New(1000, 100), false, "", func() config.Webhook { return config.Webhook{} }, discardLogger()).Register(mux)
 	handler := httpx.SecurityHeaders("default-src 'self'")(mux)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -599,5 +604,250 @@ func TestListEntryFilters(t *testing.T) {
 		if entry.CreatedAt.Year() != 2026 {
 			t.Fatalf("year filter returned %v", entry.CreatedAt)
 		}
+	}
+}
+
+func TestTrashedEntryIsHiddenFromPublicAPI(t *testing.T) {
+	srv, st := newTestAPI(t, ratelimit.New(1000, 100))
+
+	photo, err := store.NewPhoto(tinyPNG(t))
+	if err != nil {
+		t.Fatalf("NewPhoto: %v", err)
+	}
+	entry, err := st.CreateEntry(t.Context(), "trashed", "removed", "Zoe", photo)
+	if err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	entryURL := srv.URL + "/api/v1/entries/" + itoa(entry.ID)
+	if resp := getJSON(t, entryURL, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("live entry status = %d, want 200", resp.StatusCode)
+	}
+
+	if _, err := st.SoftDeleteEntries(t.Context(), []int64{entry.ID}); err != nil {
+		t.Fatalf("SoftDeleteEntries: %v", err)
+	}
+
+	resp := getJSON(t, entryURL, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("trashed detail status = %d, want 404", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body.Error.Code != "not_found" {
+		t.Fatalf("trashed detail code = %q, want not_found", body.Error.Code)
+	}
+
+	resp = getJSON(t, entryURL+"/photo", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("trashed photo status = %d, want 404", resp.StatusCode)
+	}
+
+	var page store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?q=trashed", &page)
+	if page.Total != 0 {
+		t.Fatalf("search total for trashed entry = %d, want 0", page.Total)
+	}
+
+	var stats store.Stats
+	getJSON(t, srv.URL+"/api/v1/stats", &stats)
+	if stats.Total != 78 {
+		t.Fatalf("stats total = %d, want 78 (trashed row excluded)", stats.Total)
+	}
+	if stats.WithPhoto != 0 {
+		t.Fatalf("stats with_photo = %d, want 0", stats.WithPhoto)
+	}
+	for _, pc := range stats.TopPersons {
+		if pc.Person == "Zoe" {
+			t.Fatalf("stats top persons still includes Zoe: %+v", stats.TopPersons)
+		}
+	}
+
+	var persons personCountsResponse
+	getJSON(t, srv.URL+"/api/v1/persons", &persons)
+	for _, pc := range persons.Items {
+		if pc.Person == "Zoe" {
+			t.Fatalf("persons still includes Zoe: %+v", persons.Items)
+		}
+	}
+}
+
+func TestListEntryDateFiltersAndPersonSearch(t *testing.T) {
+	srv, st := newTestAPI(t, ratelimit.New(1000, 100))
+
+	date := func(value string) time.Time {
+		t.Helper()
+		parsed, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			t.Fatalf("parse %q: %v", value, err)
+		}
+		return parsed
+	}
+	create := func(word, meaning, person, day string) store.Entry {
+		t.Helper()
+		entry, err := st.CreateEntry(t.Context(), word, meaning, person, nil)
+		if err != nil {
+			t.Fatalf("CreateEntry %q: %v", word, err)
+		}
+		updated, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
+			ID: entry.ID, Word: word, Meaning: meaning, Person: person, CreatedAt: date(day),
+		})
+		if err != nil {
+			t.Fatalf("UpdateEntry %q: %v", word, err)
+		}
+		return updated
+	}
+
+	first := create("daterange-eerste", "first slip", "Dijkstra", "1991-05-01")
+	last := create("daterange-laatste", "last slip", "Dijkstra", "1991-05-31")
+	outside := create("daterange-juni", "outside the range", "", "1991-06-01")
+
+	var page store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?from=1991-05-01&to=1991-05-31&per_page=100", &page)
+	if page.Total != 2 {
+		t.Fatalf("inclusive range total = %d, want 2", page.Total)
+	}
+	got := map[int64]bool{}
+	for _, entry := range page.Entries {
+		got[entry.ID] = true
+	}
+	if !got[first.ID] || !got[last.ID] || got[outside.ID] {
+		t.Fatalf("range membership = %+v, want first and last only", got)
+	}
+
+	var fromOnly store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?from=1991-05-02&per_page=100&sort=id&order=asc", &fromOnly)
+	seen := map[int64]bool{}
+	for _, entry := range fromOnly.Entries {
+		seen[entry.ID] = true
+	}
+	if seen[first.ID] {
+		t.Fatal("from-only range returned the entry before the boundary")
+	}
+	if !seen[last.ID] || !seen[outside.ID] {
+		t.Fatalf("from-only range is missing later entries: %+v", seen)
+	}
+
+	var withYear store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?year=1991&from=1991-05-31&to=1991-05-31&per_page=100", &withYear)
+	if withYear.Total != 1 || withYear.Entries[0].ID != last.ID {
+		t.Fatalf("year+from intersection = %+v, want only %d", withYear, last.ID)
+	}
+
+	var byPerson store.Page
+	getJSON(t, srv.URL+"/api/v1/entries?q=Dijkstra&per_page=100", &byPerson)
+	if byPerson.Total != 2 {
+		t.Fatalf("person-only search total = %d, want 2", byPerson.Total)
+	}
+
+	resp := getJSON(t, srv.URL+"/api/v1/entries?from=2024-13-01", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed from status = %d, want 400", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body.Error.Code != "invalid_date" {
+		t.Fatalf("malformed from code = %q, want invalid_date", body.Error.Code)
+	}
+	resp = getJSON(t, srv.URL+"/api/v1/entries?to=yesterday", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed to status = %d, want 400", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body.Error.Code != "invalid_date" {
+		t.Fatalf("malformed to code = %q, want invalid_date", body.Error.Code)
+	}
+}
+
+func TestCreateEntryDispatchesWebhook(t *testing.T) {
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "api-webhook.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	bodies := make(chan []byte, 1)
+	signatures := make(chan string, 1)
+	receiver := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- body
+		signatures <- r.Header.Get("X-VanDyke-Signature")
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer receiver.Close()
+
+	mux := http.NewServeMux()
+	New(st, ratelimit.New(1000, 100), false, "https://ledger.example",
+		func() config.Webhook { return config.Webhook{URL: receiver.URL, Secret: "apisecret"} },
+		discardLogger()).Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/v1/entries", "application/json",
+		strings.NewReader(`{"word":"apihook","meaning":"api webhook","person":"Bob"}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+
+	select {
+	case body := <-bodies:
+		var payload struct {
+			Event  string `json:"event"`
+			ID     int64  `json:"id"`
+			Word   string `json:"word"`
+			Person string `json:"person"`
+			URL    string `json:"url"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload.Event != "entry.created" || payload.Word != "apihook" || payload.Person != "Bob" {
+			t.Fatalf("payload = %+v", payload)
+		}
+		if payload.URL != "https://ledger.example/e/"+strconv.FormatInt(payload.ID, 10) {
+			t.Fatalf("payload url = %q, want the PUBLIC_BASE_URL permalink", payload.URL)
+		}
+		signature := <-signatures
+		mac := hmac.New(sha256.New, []byte("apisecret"))
+		_, _ = mac.Write(body)
+		if signature != "sha256="+hex.EncodeToString(mac.Sum(nil)) {
+			t.Fatalf("signature = %q", signature)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("API create did not dispatch a webhook")
+	}
+}
+
+func TestCreateEntryRecordsAuditWithNullActor(t *testing.T) {
+	srv, st := newTestAPI(t, ratelimit.New(1000, 100))
+
+	resp, err := http.Post(srv.URL+"/api/v1/entries", "application/json",
+		strings.NewReader(`{"word":"audit","meaning":"trail"}`))
+	if err != nil {
+		t.Fatalf("POST entry: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var entry store.Entry
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		t.Fatalf("decode entry: %v", err)
+	}
+
+	page, err := st.ListAudit(t.Context(), store.AuditFilter{Action: "entry.create"})
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if page.Total != 1 || len(page.Entries) != 1 {
+		t.Fatalf("audit rows = %d/%d, want one", page.Total, len(page.Entries))
+	}
+	row := page.Entries[0]
+	if row.ActorID != nil {
+		t.Fatalf("public entry.create actor = %v, want null", row.ActorID)
+	}
+	if row.Subject != strconv.FormatInt(entry.ID, 10) || !strings.Contains(row.Detail, "audit") {
+		t.Fatalf("audit row = %+v", row)
+	}
+	if row.IP == "" {
+		t.Fatal("audit row has no client IP")
 	}
 }

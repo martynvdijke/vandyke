@@ -1,0 +1,65 @@
+{{define "admin-trash"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Administration</p>
+    <h1>Trash</h1>
+    <p class="admin-lede">Deleted entries wait here until you restore or permanently purge them. Nothing is removed automatically.</p>
+  </div>
+  <a class="btn btn-ghost" href="/admin">← Back to entries</a>
+</div>
+{{template "admin-flash" .}}
+
+{{if .Entries}}
+<p class="admin-count">{{len .Entries}} {{if eq (len .Entries) 1}}entry{{else}}entries{{end}} in the trash, newest deleted first</p>
+<form id="bulk-form" class="admin-bulkbar" method="post" action="/admin/trash/restore" data-bulk-form>
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label class="admin-check"><input type="checkbox" data-select-all> <span>Select all</span></label>
+  <button class="btn btn-primary btn-small" type="submit">Restore selected</button>
+  {{if .Admin.IsOwner}}<button class="btn btn-danger btn-small" type="submit" formaction="/admin/trash/purge" data-confirm-purge>Purge selected</button>{{end}}
+</form>
+<div class="admin-table" role="table" aria-label="Trashed entries">
+  <div class="admin-row admin-row-head" role="row">
+    <span class="admin-col-check" role="columnheader"><span class="sr-only">Select</span></span>
+    <span class="admin-col-no" role="columnheader">No.</span>
+    <span class="admin-col-word" role="columnheader">Misspelling</span>
+    <span class="admin-col-meaning" role="columnheader">Correction</span>
+    <span class="admin-col-date" role="columnheader">Logged / deleted</span>
+    <span class="admin-col-actions" role="columnheader">Actions</span>
+  </div>
+  <ol class="admin-rows" role="rowgroup">
+    {{range $e := .Entries}}
+    <li class="admin-row" id="entry-{{$e.ID}}" role="row">
+      <span class="admin-col-check" role="cell"><input type="checkbox" name="ids" value="{{$e.ID}}" form="bulk-form" aria-label="Select entry {{entryNo $e.ID}}"></span>
+      <span class="admin-col-no" role="cell">{{entryNo $e.ID}}</span>
+      <span class="admin-col-word" role="cell">
+        {{if $e.PhotoURL}}<a class="entry-photo admin-thumb" href="/admin/entries/{{$e.ID}}/photo/original" title="Download original"><img src="{{$e.PhotoURL}}?size=thumb" alt="" loading="lazy" decoding="async"></a>{{end}}
+        {{if $e.Word}}<span class="wrong">{{$e.Word}}</span>{{else}}<span class="photo-note">photo entry</span>{{end}}
+        {{if $e.Person}}<span class="person-chip">{{$e.Person}}</span>{{end}}
+      </span>
+      <span class="admin-col-meaning" role="cell">{{if $e.Meaning}}<span class="arrow" aria-hidden="true">→</span><span class="right">{{$e.Meaning}}</span>{{else}}<span class="photo-note">—</span>{{end}}</span>
+      <span class="admin-col-date" role="cell">
+        <time datetime="{{$e.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate $e.CreatedAt}}</time>
+        {{if $e.DeletedAt}}<br><time datetime="{{$e.DeletedAt.Format "2006-01-02T15:04:05Z"}}">deleted {{formatDateTimeP $e.DeletedAt}}</time>{{end}}
+      </span>
+      <span class="admin-col-actions" role="cell">
+        <a class="btn btn-ghost btn-small" href="/admin/entries/{{$e.ID}}/edit">Inspect</a>
+        <form method="post" action="/admin/trash/restore">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="ids" value="{{$e.ID}}">
+          <button class="btn btn-primary btn-small" type="submit">Restore</button>
+          {{if $.Admin.IsOwner}}<button class="btn btn-danger btn-small" type="submit" formaction="/admin/trash/purge" data-confirm-purge>Purge</button>{{end}}
+        </form>
+      </span>
+    </li>
+    {{end}}
+  </ol>
+</div>
+{{else}}
+<div class="empty">
+  <p class="empty-title">The trash is empty</p>
+  <p class="empty-text">No entry has been deleted. Deleting an entry from the ledger moves it here first.</p>
+  <a class="btn btn-ghost" href="/admin">Back to the ledger</a>
+</div>
+{{end}}
+{{template "admin-foot" .}}{{end}}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"vandyke.thor.edu/vandyke/internal/auth"
@@ -77,6 +78,9 @@ func (a *Admin) handleLogin(rw http.ResponseWriter, r *http.Request) {
 	}
 	admin, err := a.store.GetAdminByUsername(r.Context(), username)
 	if err != nil || !admin.HasPassword() || !auth.VerifyPassword(admin.PasswordHash, r.FormValue("password")) {
+		// A disabled account looks like a bad credential to the caller; the
+		// audit row still records the attempted username with no actor id.
+		a.recordAudit(r, nil, username, "login.failure", username, "invalid credentials")
 		a.render(rw, http.StatusUnauthorized, "login", loginPage{
 			Umami: a.settings.Current(), Next: next, Username: username, OIDC: a.oidc != nil,
 			Error: "Invalid username or password.",
@@ -87,10 +91,12 @@ func (a *Admin) handleLogin(rw http.ResponseWriter, r *http.Request) {
 		a.internalError(rw, err)
 		return
 	}
+	a.recordAudit(r, &admin.ID, adminActorName(admin), "login.success", admin.Username, "")
 	http.Redirect(rw, r, next, http.StatusSeeOther)
 }
 
 func (a *Admin) handleLogout(rw http.ResponseWriter, r *http.Request) {
+	a.auditAs(r, "logout", "", "")
 	a.clearSession(rw, r)
 	http.Redirect(rw, r, "/admin/login", http.StatusSeeOther)
 }
@@ -175,6 +181,7 @@ func (a *Admin) handleSetup(rw http.ResponseWriter, r *http.Request) {
 		a.internalError(rw, err)
 		return
 	}
+	a.recordAudit(r, nil, username, "admin.create", strconv.FormatInt(admin.ID, 10), "first admin role=owner")
 	if err := a.startSession(rw, r, admin); err != nil {
 		a.internalError(rw, err)
 		return
@@ -265,6 +272,7 @@ func (a *Admin) handleOIDCCallback(rw http.ResponseWriter, r *http.Request) {
 		a.internalError(rw, err)
 		return
 	}
+	a.recordAudit(r, &admin.ID, adminActorName(admin), "login.success", adminActorName(admin), "oidc")
 	http.Redirect(rw, r, "/admin", http.StatusSeeOther)
 }
 

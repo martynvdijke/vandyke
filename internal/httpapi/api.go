@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/upload"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 const (
@@ -23,15 +26,24 @@ const (
 
 // API serves /api/v1 endpoints.
 type API struct {
-	store      *store.Store
-	limiter    *ratelimit.Limiter
-	trustProxy bool
-	logger     *slog.Logger
+	store         *store.Store
+	limiter       *ratelimit.Limiter
+	trustProxy    bool
+	publicBaseURL string
+	hooks         *webhook.Dispatcher
+	logger        *slog.Logger
 }
 
 // New creates the API.
-func New(st *store.Store, limiter *ratelimit.Limiter, trustProxy bool, logger *slog.Logger) *API {
-	return &API{store: st, limiter: limiter, trustProxy: trustProxy, logger: logger}
+func New(st *store.Store, limiter *ratelimit.Limiter, trustProxy bool, publicBaseURL string, webhookConfig func() config.Webhook, logger *slog.Logger) *API {
+	return &API{
+		store:         st,
+		limiter:       limiter,
+		trustProxy:    trustProxy,
+		publicBaseURL: publicBaseURL,
+		hooks:         webhook.New(webhookConfig, logger),
+		logger:        logger,
+	}
 }
 
 // Register wires the API routes into mux.
@@ -50,6 +62,17 @@ func (a *API) handleHealth(rw http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) handleListEntries(rw http.ResponseWriter, r *http.Request) {
+	from, err := queryDate(r, "from")
+	if err != nil {
+		httpx.WriteError(rw, http.StatusBadRequest, "invalid_date", "from must be a date in YYYY-MM-DD form")
+		return
+	}
+	to, err := queryDate(r, "to")
+	if err != nil {
+		httpx.WriteError(rw, http.StatusBadRequest, "invalid_date", "to must be a date in YYYY-MM-DD form")
+		return
+	}
+
 	page, err := a.store.ListEntries(r.Context(), store.ListParams{
 		Query:    r.URL.Query().Get("q"),
 		Sort:     r.URL.Query().Get("sort"),
@@ -59,6 +82,8 @@ func (a *API) handleListEntries(rw http.ResponseWriter, r *http.Request) {
 		PerPage:  queryInt(r, "per_page", store.DefaultPerPage),
 		HasPhoto: queryOptionalBool(r, "photo"),
 		Year:     queryInt(r, "year", 0),
+		From:     from,
+		To:       to,
 	})
 	if err != nil {
 		a.logger.Error("list entries", "error", err)
@@ -169,6 +194,20 @@ func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, m
 		return
 	}
 	rw.Header().Set("Location", fmt.Sprintf("/api/v1/entries/%d", entry.ID))
+	// The public API carries no admin identity, so the audit row has a null
+	// actor and records the client IP instead.
+	if err := a.store.RecordAudit(r.Context(), store.AuditRecord{
+		Action:    "entry.create",
+		Subject:   strconv.FormatInt(entry.ID, 10),
+		Detail:    "word=" + entry.Word,
+		IP:        httpx.ClientIP(r, a.trustProxy),
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		a.logger.Error("record audit", "action", "entry.create", "error", err)
+	}
+	// Fire-and-forget: dispatch returns before the receiver is contacted.
+	base := httpx.BaseURL(r, a.publicBaseURL, a.trustProxy)
+	a.hooks.Dispatch(webhook.BuildPayload(entry, fmt.Sprintf("%s/e/%d", base, entry.ID)))
 	httpx.WriteJSON(rw, http.StatusCreated, entry)
 }
 
@@ -184,6 +223,15 @@ func (a *API) handleGetEntryPhoto(rw http.ResponseWriter, r *http.Request) {
 	}
 	if size != "display" && size != "thumb" {
 		httpx.WriteError(rw, http.StatusBadRequest, "invalid_size", "size must be display or thumb")
+		return
+	}
+	if _, err := a.store.GetEntry(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			httpx.WriteError(rw, http.StatusNotFound, "not_found", "entry does not exist")
+			return
+		}
+		a.logger.Error("get entry for photo", "error", err, "id", id)
+		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not load entry")
 		return
 	}
 	photo, err := a.store.GetEntryPhotoSize(r.Context(), id, size)
@@ -275,4 +323,15 @@ func queryOptionalBool(r *http.Request, key string) *bool {
 	}
 	value := raw == "1" || raw == "true" || raw == "yes"
 	return &value
+}
+
+// queryDate parses an optional YYYY-MM-DD parameter. A missing value is the
+// zero time (unset); a malformed one is reported so the handler can answer
+// invalid_date instead of silently dropping the filter.
+func queryDate(r *http.Request, key string) (time.Time, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse("2006-01-02", raw)
 }

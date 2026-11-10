@@ -52,6 +52,14 @@ type editData struct {
 	Error       string
 }
 
+type trashData struct {
+	Admin   store.Admin
+	Umami   config.Umami
+	CSRF    string
+	Entries []store.Entry
+	Flash   string
+}
+
 func (a *Admin) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	ledger, err := a.buildLedger(r)
 	if err != nil {
@@ -225,6 +233,16 @@ func (a *Admin) handleOriginalPhoto(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "invalid entry id", http.StatusBadRequest)
 		return
 	}
+	// Admins may inspect the photo of a trashed entry before restoring or
+	// purging it, so this route accepts deleted rows.
+	if _, err := a.store.GetEntryIncludingDeleted(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(rw, r)
+			return
+		}
+		a.internalError(rw, err)
+		return
+	}
 	photo, err := a.store.GetEntryPhotoSize(r.Context(), id, "original")
 	if errors.Is(err, store.ErrNotFound) {
 		http.NotFound(rw, r)
@@ -261,7 +279,7 @@ func (a *Admin) handleEdit(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "invalid entry id", http.StatusBadRequest)
 		return
 	}
-	entry, err := a.store.GetEntry(r.Context(), id)
+	entry, err := a.store.GetEntryIncludingDeleted(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		http.NotFound(rw, r)
 		return
@@ -289,7 +307,7 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "invalid entry id", http.StatusBadRequest)
 		return
 	}
-	entry, err := a.store.GetEntry(r.Context(), id)
+	entry, err := a.store.GetEntryIncludingDeleted(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		http.NotFound(rw, r)
 		return
@@ -339,7 +357,27 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 		a.renderEditError(rw, r, entry, word, meaning, person, dateRaw, removePhoto, capitalize(err.Error()))
 		return
 	}
-	_ = updated
+	var changed []string
+	if updated.Word != entry.Word {
+		changed = append(changed, "word")
+	}
+	if updated.Meaning != entry.Meaning {
+		changed = append(changed, "meaning")
+	}
+	if updated.Person != entry.Person {
+		changed = append(changed, "person")
+	}
+	if !updated.CreatedAt.Equal(entry.CreatedAt) {
+		changed = append(changed, "created_at")
+	}
+	if photo != nil || (removePhoto && entry.PhotoURL != "") {
+		changed = append(changed, "photo")
+	}
+	detail := "no field changed"
+	if len(changed) > 0 {
+		detail = "changed: " + strings.Join(changed, ",")
+	}
+	a.auditAs(r, "entry.update", strconv.FormatInt(id, 10), detail)
 	http.Redirect(rw, r, fmt.Sprintf("/admin?updated=1#entry-%d", id), http.StatusSeeOther)
 }
 
@@ -361,30 +399,93 @@ func (a *Admin) renderEditError(rw http.ResponseWriter, r *http.Request, entry s
 }
 
 func (a *Admin) handleDelete(rw http.ResponseWriter, r *http.Request) {
+	ids, ok := parseBulkIDs(rw, r)
+	if !ok {
+		return
+	}
+	n, err := a.store.SoftDeleteEntries(r.Context(), ids)
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	a.auditAs(r, "entry.delete", joinIDs(ids), fmt.Sprintf("count=%d", n))
+	http.Redirect(rw, r, fmt.Sprintf("/admin?deleted=%d", n), http.StatusSeeOther)
+}
+
+// parseBulkIDs reads and validates the `ids` form field. It mirrors the
+// historical delete handler: an empty selection is a 400, more than 100 ids is
+// a 400, and any malformed id rejects the whole request.
+func parseBulkIDs(rw http.ResponseWriter, r *http.Request) ([]int64, bool) {
 	rawIDs := r.Form["ids"]
 	if len(rawIDs) == 0 {
 		http.Error(rw, "no entries selected", http.StatusBadRequest)
-		return
+		return nil, false
 	}
 	if len(rawIDs) > 100 {
 		http.Error(rw, "too many entries selected", http.StatusBadRequest)
-		return
+		return nil, false
 	}
 	ids := make([]int64, 0, len(rawIDs))
 	for _, raw := range rawIDs {
 		id, err := parseID(raw)
 		if err != nil {
 			http.Error(rw, "invalid entry id", http.StatusBadRequest)
-			return
+			return nil, false
 		}
 		ids = append(ids, id)
 	}
-	n, err := a.store.DeleteEntries(r.Context(), ids)
+	return ids, true
+}
+
+func (a *Admin) handleTrash(rw http.ResponseWriter, r *http.Request) {
+	entries, err := a.store.ListTrashedEntries(r.Context())
 	if err != nil {
 		a.internalError(rw, err)
 		return
 	}
-	http.Redirect(rw, r, fmt.Sprintf("/admin?deleted=%d", n), http.StatusSeeOther)
+	flash, _ := a.flashMessage(r)
+	state := stateFrom(r)
+	a.render(rw, http.StatusOK, "admin-trash", trashData{
+		Admin: state.Admin, Umami: a.settings.Current(), CSRF: state.Session.CSRFToken,
+		Entries: entries, Flash: flash,
+	})
+}
+
+func (a *Admin) handleTrashRestore(rw http.ResponseWriter, r *http.Request) {
+	ids, ok := parseBulkIDs(rw, r)
+	if !ok {
+		return
+	}
+	n, err := a.store.RestoreEntries(r.Context(), ids)
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	a.auditAs(r, "entry.restore", joinIDs(ids), fmt.Sprintf("count=%d", n))
+	http.Redirect(rw, r, fmt.Sprintf("/admin/trash?restored=%d", n), http.StatusSeeOther)
+}
+
+func (a *Admin) handleTrashPurge(rw http.ResponseWriter, r *http.Request) {
+	ids, ok := parseBulkIDs(rw, r)
+	if !ok {
+		return
+	}
+	n, err := a.store.PurgeEntries(r.Context(), ids)
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	a.auditAs(r, "entry.purge", joinIDs(ids), fmt.Sprintf("count=%d", n))
+	http.Redirect(rw, r, fmt.Sprintf("/admin/trash?purged=%d", n), http.StatusSeeOther)
+}
+
+// joinIDs renders entry ids for an audit subject.
+func joinIDs(ids []int64) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(parts, ",")
 }
 
 func capitalize(s string) string {

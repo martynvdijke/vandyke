@@ -492,6 +492,7 @@ button {
 .searchbox {
   flex: 1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.65rem;
   padding: 0.5rem 0.85rem;
@@ -500,6 +501,17 @@ button {
   background: var(--card);
   box-shadow: var(--shadow-s);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search-hint {
+  flex-basis: 100%;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--ink-mute);
+}
+
+.search-hint code {
+  font-size: 0.72rem;
 }
 
 .searchbox:focus-within {
@@ -551,6 +563,18 @@ button {
   background: var(--card);
   color: var(--ink);
   cursor: pointer;
+}
+
+.pagesize input[type="date"] {
+  font: inherit;
+  font-size: 0.88rem;
+  letter-spacing: normal;
+  text-transform: none;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--ink);
 }
 
 .pagesize-person select {
@@ -1960,4 +1984,34 @@ button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ---------- accessibility utilities ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: -9999px;
+  z-index: 1000;
+  padding: 0.6rem 1rem;
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 0 0 var(--radius) 0;
+  box-shadow: var(--shadow-l);
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  left: 0;
 }

@@ -12,6 +12,33 @@ import (
 	"time"
 )
 
+// BaseURL resolves the absolute server origin used for canonical URLs, Open
+// Graph metadata and the feed. PUBLIC_BASE_URL wins; otherwise the request's
+// scheme (honouring X-Forwarded-Proto only behind a trusted proxy) and host are
+// used. The result has no trailing slash.
+func BaseURL(r *http.Request, publicBaseURL string, trustProxy bool) string {
+	if base := strings.TrimRight(publicBaseURL, "/"); base != "" {
+		return base
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if trustProxy {
+		switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))) {
+		case "https":
+			scheme = "https"
+		case "http":
+			scheme = "http"
+		}
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost"
+	}
+	return scheme + "://" + host
+}
+
 // ClientIP resolves the caller address, honouring X-Forwarded-For only when
 // the deployment declares a trusted proxy.
 func ClientIP(r *http.Request, trustProxy bool) string {

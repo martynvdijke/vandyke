@@ -18,26 +18,29 @@
   <meta name="twitter:description" content="Entry {{entryNo .Entry.ID}} in the LANCo misspelling ledger.">
   <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/css/app.css">
   {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
   <script src="/static/js/app.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#content">Skip to content</a>
   <div class="grain" aria-hidden="true"></div>
   <header class="masthead">
     <div class="masthead-inner">
       <a class="wordmark" href="/">vanDyke</a>
       <nav class="masthead-nav" aria-label="Main">
         <a class="nav-link" href="/">The ledger</a>
-        <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme">
+        <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" aria-pressed="false">
           <span class="theme-dot" aria-hidden="true"></span>
         </button>
       </nav>
     </div>
   </header>
 
-  <main class="page permalink-page">
+  <main class="page permalink-page" id="content" tabindex="-1">
     <article class="permalink-card">
       <p class="eyebrow">Entry {{entryNo .Entry.ID}}</p>
       {{if .Entry.Word}}<h1 class="permalink-word">{{.Entry.Word}}</h1>{{else}}<h1 class="permalink-word permalink-word-photo">Photo entry</h1>{{end}}
@@ -72,12 +75,15 @@
   <meta name="robots" content="noindex">
   <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/css/app.css">
   {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
   <script src="/static/js/app.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#content">Skip to content</a>
   <div class="grain" aria-hidden="true"></div>
   <header class="masthead">
     <div class="masthead-inner">
@@ -85,7 +91,7 @@
       <nav class="masthead-nav" aria-label="Main"><a class="nav-link" href="/">The ledger</a></nav>
     </div>
   </header>
-  <main class="page permalink-page">
+  <main class="page permalink-page" id="content" tabindex="-1">
     <article class="permalink-card permalink-error">
       <p class="eyebrow">404</p>
       <h1 class="permalink-word">{{.Title}}</h1>

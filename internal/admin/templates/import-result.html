@@ -1,0 +1,35 @@
+{{define "admin-import-result"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Transfer</p>
+    <h1>{{if .Preview}}Import preview{{else}}Import result{{end}}</h1>
+    <p class="admin-lede">{{if .Preview}}No row was written. Run the same file with mode=apply to import it.{{else}}The file was processed in a single transaction.{{end}}</p>
+  </div>
+</div>
+
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="admin-card admin-settings-card">
+  {{if .Preview}}
+  <dl class="admin-env-note">
+    <div><dt>Would create</dt><dd>{{.Created}}</dd></div>
+    <div><dt>Would skip (duplicate in file)</dt><dd>{{.Skipped}}</dd></div>
+    <div><dt>Would conflict</dt><dd>{{.Conflicts}}</dd></div>
+    <div><dt>Conflict mode</dt><dd>{{.Conflict}}</dd></div>
+  </dl>
+  {{else}}
+  <dl class="admin-env-note">
+    <div><dt>Created</dt><dd>{{.Created}}</dd></div>
+    <div><dt>Skipped</dt><dd>{{.Skipped}}</dd></div>
+    <div><dt>Replaced</dt><dd>{{.Replaced}}</dd></div>
+    <div><dt>Failed</dt><dd>{{.Failed}}</dd></div>
+    <div><dt>Conflict mode</dt><dd>{{.Conflict}}</dd></div>
+  </dl>
+  {{end}}
+  <div class="admin-form-actions">
+    <a class="btn btn-primary" href="/admin">Back to entries</a>
+    <a class="btn btn-ghost" href="/admin/import">Import another file</a>
+  </div>
+</section>
+{{template "admin-foot" .}}{{end}}

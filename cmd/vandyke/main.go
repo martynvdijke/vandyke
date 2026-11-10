@@ -56,12 +56,12 @@ func run() error {
 	}
 
 	limiter := ratelimit.New(cfg.AddRateLimitPerHour, cfg.AddRateLimitBurst)
-	api := httpapi.New(st, limiter, cfg.TrustProxy, logger)
-	settingsStore, err := settings.New(ctx, st, cfg.Umami)
+	settingsStore, err := settings.New(ctx, st, cfg.Umami, cfg.Webhook)
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	ui, err := web.New(st, limiter, settingsStore.Current, cfg.TrustProxy, cfg.PublicBaseURL, logger)
+	api := httpapi.New(st, limiter, cfg.TrustProxy, cfg.PublicBaseURL, settingsStore.CurrentWebhook, logger)
+	ui, err := web.New(st, limiter, settingsStore.Current, settingsStore.CurrentWebhook, cfg.TrustProxy, cfg.PublicBaseURL, logger)
 	if err != nil {
 		return err
 	}
@@ -98,6 +98,7 @@ func run() error {
 			"addr", srv.Addr,
 			"db", cfg.DBPath,
 			"umami", settingsStore.Current().Enabled(),
+			"webhook", settingsStore.CurrentWebhook().Enabled(),
 			"admin_setup_token", cfg.AdminSetupToken != "",
 			"oidc", cfg.OIDC.Enabled(),
 			"public_base_url", cfg.PublicBaseURL,

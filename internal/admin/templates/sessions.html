@@ -1,0 +1,48 @@
+{{define "admin-sessions"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Your account</p>
+    <h1>Sessions</h1>
+    <p class="admin-lede">Every browser signed in as you. Revoke one session by its reference, or sign out everywhere else.</p>
+  </div>
+  <a class="btn btn-ghost" href="/admin/account">← Account</a>
+</div>
+{{template "admin-flash" .}}
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<form method="post" action="/admin/sessions/revoke-all" class="admin-form-actions" data-confirm-revoke-all>
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button class="btn btn-danger" type="submit">Sign out every other session</button>
+</form>
+
+<div class="admin-table" role="table" aria-label="Your sessions">
+  <div class="admin-row admin-row-head" role="row">
+    <span role="columnheader">Reference</span>
+    <span role="columnheader">Created</span>
+    <span role="columnheader">Expires</span>
+    <span role="columnheader">Actions</span>
+  </div>
+  <ol class="admin-rows" role="rowgroup">
+    {{range $s := .Sessions}}
+    <li class="admin-row" role="row">
+      <span role="cell">
+        {{if $s.Ref}}<code>{{$s.Ref}}</code>{{else}}<span class="admin-muted">legacy session</span>{{end}}
+        {{if $s.Current}}<span class="person-chip">current</span>{{end}}
+      </span>
+      <span role="cell"><time datetime="{{$s.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDateTime $s.CreatedAt}}</time></span>
+      <span role="cell"><time datetime="{{$s.ExpiresAt.Format "2006-01-02T15:04:05Z"}}">{{formatDateTime $s.ExpiresAt}}</time></span>
+      <span role="cell">
+        {{if and $s.Ref (not $s.Current)}}
+        <form method="post" action="/admin/sessions/revoke">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="ref" value="{{$s.Ref}}">
+          <button class="btn btn-danger btn-small" type="submit">Revoke</button>
+        </form>
+        {{else}}<span class="admin-muted">—</span>{{end}}
+      </span>
+    </li>
+    {{end}}
+  </ol>
+</div>
+{{template "admin-foot" .}}{{end}}

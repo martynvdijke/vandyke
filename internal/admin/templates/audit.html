@@ -1,0 +1,73 @@
+{{define "admin-audit"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Security</p>
+    <h1>Audit trail</h1>
+    <p class="admin-lede">An append-only record of sign-ins, entry changes, settings and admin actions. Newest first.</p>
+  </div>
+</div>
+
+<form class="admin-toolbar" method="get" action="/admin/audit">
+  <label class="searchbox">
+    <input type="search" name="action" value="{{.FilterAction}}" placeholder="Action, e.g. login.failure" aria-label="Filter by action">
+  </label>
+  <label class="searchbox">
+    <input type="search" name="actor" value="{{.FilterActor}}" placeholder="Actor username" aria-label="Filter by actor">
+  </label>
+  <label class="pagesize">
+    <span>From</span>
+    <input type="date" name="from" value="{{.FilterFrom}}" aria-label="From date">
+  </label>
+  <label class="pagesize">
+    <span>To</span>
+    <input type="date" name="to" value="{{.FilterTo}}" aria-label="To date">
+  </label>
+  <button class="btn btn-primary btn-small" type="submit">Filter</button>
+  <a class="btn btn-ghost btn-small" href="/admin/audit">Clear</a>
+</form>
+
+<p class="admin-count">{{if .Total}}Showing {{len .Entries}} of <strong>{{.Total}}</strong> rows{{else}}No audit rows match{{end}}</p>
+
+{{if .Entries}}
+<div class="admin-table" role="table" aria-label="Audit rows">
+  <div class="admin-row admin-row-head" role="row">
+    <span role="columnheader">Time</span>
+    <span role="columnheader">Actor</span>
+    <span role="columnheader">Action</span>
+    <span role="columnheader">Subject</span>
+    <span role="columnheader">Detail</span>
+    <span role="columnheader">IP</span>
+  </div>
+  <ol class="admin-rows" role="rowgroup">
+    {{range $e := .Entries}}
+    <li class="admin-row" role="row">
+      <span role="cell"><time datetime="{{$e.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDateTime $e.CreatedAt}}</time></span>
+      <span role="cell">{{if $e.ActorName}}{{$e.ActorName}}{{else}}<span class="admin-muted">—</span>{{end}}{{if $e.ActorID}} <span class="admin-muted">#{{$e.ActorID}}</span>{{end}}</span>
+      <span role="cell"><code>{{$e.Action}}</code></span>
+      <span role="cell">{{$e.Subject}}</span>
+      <span role="cell">{{$e.Detail}}</span>
+      <span role="cell">{{$e.IP}}</span>
+    </li>
+    {{end}}
+  </ol>
+</div>
+
+{{if gt .Pages 1}}
+<nav class="pager" aria-label="Audit pages">
+  {{if gt .Page 1}}
+  <a class="page-btn page-edge" href="/admin/audit?action={{.FilterAction}}&actor={{.FilterActor}}&from={{.FilterFrom}}&to={{.FilterTo}}&page={{dec .Page}}" rel="prev">← Prev</a>
+  {{else}}<span class="page-btn page-edge is-disabled">← Prev</span>{{end}}
+  <span class="page-nums">Page {{.Page}} of {{.Pages}}</span>
+  {{if lt .Page .Pages}}
+  <a class="page-btn page-edge" href="/admin/audit?action={{.FilterAction}}&actor={{.FilterActor}}&from={{.FilterFrom}}&to={{.FilterTo}}&page={{inc .Page}}" rel="next">Next →</a>
+  {{else}}<span class="page-btn page-edge is-disabled">Next →</span>{{end}}
+</nav>
+{{end}}
+{{else}}
+<div class="empty">
+  <p class="empty-title">Nothing recorded</p>
+  <p class="empty-text">No audit row matches this filter.</p>
+</div>
+{{end}}
+{{template "admin-foot" .}}{{end}}
