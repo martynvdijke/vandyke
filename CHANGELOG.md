@@ -1,3 +1,11 @@
+## [1.10.1](https://github.com/martynvdijke/vandyke/compare/v1.10.0...v1.10.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **android:** compile against SDK 37 for permission_handler_android ([d86b0ec](https://github.com/martynvdijke/vandyke/commit/d86b0ec8f27d563a22c70090093f5dc28b13245b))
+* **renovate:** disable platform automerge so Renovate merges green PRs itself ([d042ab3](https://github.com/martynvdijke/vandyke/commit/d042ab37fdd7dedfd5e0ba70efe219c45172a5bc))
+
 # [1.10.0](https://github.com/martynvdijke/vandyke/compare/v1.9.1...v1.10.0) (2026-11-10)
 
 
