@@ -1,3 +1,16 @@
+# [1.10.0](https://github.com/martynvdijke/vandyke/compare/v1.9.1...v1.10.0) (2026-11-10)
+
+
+### Bug Fixes
+
+* **lint:** check the row closers and drop the unused test helper ([7e0543c](https://github.com/martynvdijke/vandyke/commit/7e0543c5a8b3649b241e6b19bd6faee1b41fabe2))
+
+
+### Features
+
+* add ledger export, trash, search depth, feed, webhooks and admin roles ([be58720](https://github.com/martynvdijke/vandyke/commit/be5872015d51a01b42670d28ed51fe37e1a271db)), closes [main#content](https://github.com/main/issues/content)
+* **mobile:** capture photos and share permalinks from the app ([cc30dfd](https://github.com/martynvdijke/vandyke/commit/cc30dfd0ca829da6faf55e641e17a32c555dc25f))
+
 ## [1.9.1](https://github.com/martynvdijke/vandyke/compare/v1.9.0...v1.9.1) (2026-11-09)
 
 
