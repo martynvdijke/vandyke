@@ -227,6 +227,7 @@ void showVandykeSnack(
   BuildContext context,
   String message, {
   bool error = false,
+  SnackBarAction? action,
 }) {
   final scheme = Theme.of(context).colorScheme;
   ScaffoldMessenger.of(context).showSnackBar(
@@ -234,6 +235,7 @@ void showVandykeSnack(
       content: Text(message),
       backgroundColor: error ? scheme.error : scheme.inverseSurface,
       behavior: SnackBarBehavior.floating,
+      action: action,
     ),
   );
 }

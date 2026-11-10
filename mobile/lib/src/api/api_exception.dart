@@ -19,8 +19,14 @@ class ApiException implements Exception {
   bool get isValidation => statusCode == 422;
   bool get isDuplicate => statusCode == 409;
 
+  /// The body or an attached image exceeded the server's limits.
+  bool get isPayloadTooLarge => statusCode == 413;
+
   /// A message suitable for a full-width error panel.
   String get friendlyMessage {
+    if (isPayloadTooLarge) {
+      return 'That image is too large for the ledger. Try a smaller photo.';
+    }
     if (isRateLimited) {
       final wait = retryAfterSeconds;
       final suffix = wait == null

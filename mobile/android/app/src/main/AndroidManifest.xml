@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Photo evidence: the camera is requested at runtime before capture;
+         the gallery needs no permission on modern Android. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
         android:label="vanDyke Ledger"
         android:name="${applicationName}"
@@ -27,6 +30,28 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- /e/{id} permalinks on the public host; the app refuses to
+                 resolve a host that differs from the configured ledger, and a
+                 self-hosted domain adds its own android:host entry. Path
+                 matching needs a host, so the public one is named here.
+                 Verification is off until an asset-links file is published. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="https"
+                    android:host="vandyke.thor.edu"
+                    android:pathPrefix="/e/"/>
+            </intent-filter>
+            <!-- Tester scheme: adb shell am start -a android.intent.action.VIEW \
+                 -d "vandyke://e/42" xyz.vandijke.vandyke -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="vandyke" android:host="e"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -319,6 +320,188 @@ void main() {
           'message',
           contains('Could not reach the ledger'),
         ),
+      ),
+    );
+  });
+
+  group('createEntry photo upload', () {
+    late Directory dir;
+
+    setUp(() async {
+      dir = await Directory.systemTemp.createTemp('vandyke_upload_');
+    });
+
+    tearDown(() async {
+      if (dir.existsSync()) await dir.delete(recursive: true);
+    });
+
+    test('posts multipart form data with the photo part', () async {
+      final file = File('${dir.path}/evidence.jpg')
+        ..writeAsBytesSync(List<int>.filled(64, 7));
+      late http.Request captured;
+      final progress = <String>[];
+      final client = ApiClient(
+        serverUrl: 'https://vandyke.example.com',
+        client: MockClient((request) async {
+          captured = request;
+          return http.Response(
+            jsonEncode({
+              'id': 101,
+              'word': 'Vandyck',
+              'meaning': 'Should be vanDyke',
+              'person': 'Reception',
+              'photo_url': '/media/101.jpg',
+              'created_at': '2026-11-08T10:00:00Z',
+            }),
+            201,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+
+      final entry = await client.createEntry(
+        word: ' Vandyck ',
+        meaning: 'Should be vanDyke',
+        person: 'Reception',
+        photoPath: file.path,
+        onProgress: (sent, total) => progress.add('$sent/$total'),
+      );
+
+      expect(captured.method, 'POST');
+      expect(captured.url.path, '/api/v1/entries');
+      expect(captured.headers['Accept'], 'application/json');
+      expect(
+        captured.headers['Content-Type'],
+        startsWith('multipart/form-data; boundary='),
+      );
+
+      final body = utf8.decode(captured.bodyBytes);
+      final lowerBody = body.toLowerCase();
+      expect(body, contains('name="word"'));
+      expect(body, contains('Vandyck'));
+      expect(body, contains('name="meaning"'));
+      expect(body, contains('Should be vanDyke'));
+      expect(body, contains('name="person"'));
+      expect(body, contains('Reception'));
+      expect(body, contains('name="photo"'));
+      expect(body, contains('filename="evidence.jpg"'));
+      expect(lowerBody, contains('content-type: image/jpeg'));
+
+      // The progress callback reports bytes written and the total body size.
+      expect(progress, isNotEmpty);
+      final sent = int.parse(progress.last.split('/').first);
+      final total = int.parse(progress.last.split('/').last);
+      expect(total, greaterThan(0));
+      expect(sent, total);
+
+      expect(entry.id, 101);
+      expect(entry.hasPhoto, isTrue);
+    });
+
+    test('keeps the JSON body when no photo is attached', () async {
+      late http.Request captured;
+      final client = ApiClient(
+        serverUrl: 'https://vandyke.example.com',
+        client: MockClient((request) async {
+          captured = request;
+          return http.Response(
+            jsonEncode({
+              'id': 102,
+              'word': 'Vandike',
+              'meaning': 'Should be vanDyke',
+              'created_at': '2026-11-08T10:00:00Z',
+            }),
+            201,
+          );
+        }),
+      );
+
+      await client.createEntry(
+        word: 'Vandike',
+        meaning: 'Should be vanDyke',
+        onProgress: (_, _) => fail('progress belongs to the multipart path'),
+      );
+
+      expect(captured.headers['Content-Type'], startsWith('application/json'));
+      final body = jsonDecode(captured.body) as Map<String, dynamic>;
+      expect(body['word'], 'Vandike');
+    });
+  });
+
+  test('a 413 response becomes the image-too-large message', () async {
+    final client = ApiClient(
+      serverUrl: 'https://vandyke.example.com',
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'error': {
+              'code': 'request_too_large',
+              'message': 'request body too large',
+            },
+          }),
+          413,
+        ),
+      ),
+    );
+
+    await expectLater(
+      client.createEntry(word: 'Vandyke', meaning: 'Oops'),
+      throwsA(
+        isA<ApiException>()
+            .having((e) => e.isPayloadTooLarge, 'isPayloadTooLarge', isTrue)
+            .having(
+              (e) => e.friendlyMessage,
+              'friendlyMessage',
+              contains('image is too large'),
+            ),
+      ),
+    );
+  });
+
+  test('entryById resolves GET /api/v1/entries/{id}', () async {
+    late http.Request captured;
+    final client = ApiClient(
+      serverUrl: 'https://vandyke.example.com',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode({
+            'id': 42,
+            'word': 'Van Dike',
+            'meaning': 'Should be vanDyke',
+            'created_at': '2026-03-14T09:30:00Z',
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final entry = await client.entryById(42);
+
+    expect(captured.method, 'GET');
+    expect(captured.url.path, '/api/v1/entries/42');
+    expect(entry.id, 42);
+    expect(entry.word, 'Van Dike');
+  });
+
+  test('entryById surfaces a 404 as a typed not-found', () async {
+    final client = ApiClient(
+      serverUrl: 'https://vandyke.example.com',
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'error': {'code': 'not_found', 'message': 'no such entry'},
+          }),
+          404,
+        ),
+      ),
+    );
+
+    await expectLater(
+      client.entryById(999),
+      throwsA(
+        isA<ApiException>().having((e) => e.isNotFound, 'isNotFound', isTrue),
       ),
     );
   });

@@ -2,9 +2,48 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import 'api_exception.dart';
 import 'models.dart';
+
+/// Reports how much of a request body has been written, in bytes.
+typedef UploadProgressCallback = void Function(int bytesSent, int bytesTotal);
+
+/// A multipart request whose body stream reports how much has been written.
+///
+/// `http.MultipartRequest` finalizes its body without exposing progress, so
+/// the stream is wrapped here to count the bytes as the client consumes them.
+class ProgressMultipartRequest extends http.MultipartRequest {
+  ProgressMultipartRequest(
+    super.method,
+    super.url, {
+    this.onProgress,
+  });
+
+  final UploadProgressCallback? onProgress;
+
+  @override
+  http.ByteStream finalize() {
+    final byteStream = super.finalize();
+    final onProgress = this.onProgress;
+    if (onProgress == null) return byteStream;
+
+    final total = contentLength;
+    var sent = 0;
+    return http.ByteStream(
+      byteStream.transform(
+        StreamTransformer<List<int>, List<int>>.fromHandlers(
+          handleData: (chunk, sink) {
+            sent += chunk.length;
+            onProgress(sent, total);
+            sink.add(chunk);
+          },
+        ),
+      ),
+    );
+  }
+}
 
 /// Thin, injectable wrapper around the public `/api/v1` ledger contract.
 class ApiClient {
@@ -88,17 +127,50 @@ class ApiClient {
     required String word,
     required String meaning,
     String person = '',
+    String? photoPath,
+    UploadProgressCallback? onProgress,
   }) async {
-    final decoded = await _send(
+    final trimmedWord = word.trim();
+    final trimmedMeaning = meaning.trim();
+    final trimmedPerson = person.trim();
+    final photo = photoPath?.trim() ?? '';
+    if (photo.isEmpty) {
+      final decoded = await _send(
+        'POST',
+        '/entries',
+        body: {
+          'word': trimmedWord,
+          'meaning': trimmedMeaning,
+          if (trimmedPerson.isNotEmpty) 'person': trimmedPerson,
+        },
+        route: '/entries',
+      );
+      return Entry.fromJson(decoded);
+    }
+
+    final request = ProgressMultipartRequest(
       'POST',
-      '/entries',
-      body: {
-        'word': word.trim(),
-        'meaning': meaning.trim(),
-        if (person.trim().isNotEmpty) 'person': person.trim(),
-      },
-      route: '/entries',
+      _uri('/entries'),
+      onProgress: onProgress,
+    )
+      ..fields['word'] = trimmedWord
+      ..fields['meaning'] = trimmedMeaning;
+    if (trimmedPerson.isNotEmpty) request.fields['person'] = trimmedPerson;
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'photo',
+        photo,
+        contentType: MediaType('image', 'jpeg'),
+      ),
     );
+    final decoded = await _dispatch(request, route: '/entries');
+    return Entry.fromJson(decoded);
+  }
+
+  /// Resolves one entry by id, so a permalink or deep link never depends on
+  /// the entry sitting in the currently loaded page.
+  Future<Entry> entryById(int id) async {
+    final decoded = await _send('GET', '/entries/$id', route: '/entries/{id}');
     return Entry.fromJson(decoded);
   }
 
@@ -108,15 +180,24 @@ class ApiClient {
     Map<String, String>? query,
     Map<String, Object?>? body,
     required String route,
+  }) {
+    final request = http.Request(method, _uri(path, query))
+      ..headers.addAll({
+        'Accept': 'application/json',
+        if (body != null) 'Content-Type': 'application/json',
+      });
+    if (body != null) request.body = jsonEncode(body);
+    return _dispatch(request, route: route);
+  }
+
+  Future<Map<String, dynamic>> _dispatch(
+    http.BaseRequest request, {
+    required String route,
   }) async {
-    final headers = <String, String>{
-      'Accept': 'application/json',
-      if (body != null) 'Content-Type': 'application/json',
-    };
+    if (!request.headers.containsKey('Accept')) {
+      request.headers['Accept'] = 'application/json';
+    }
     try {
-      final request = http.Request(method, _uri(path, query))
-        ..headers.addAll(headers);
-      if (body != null) request.body = jsonEncode(body);
       final streamed = await _client.send(request).timeout(_timeout);
       final response = await http.Response.fromStream(streamed);
       final decoded = _decode(response.body);
@@ -149,6 +230,7 @@ class ApiClient {
   }
 
   static String _fallbackMessage(int statusCode) {
+    if (statusCode == 413) return 'The image is too large for the ledger.';
     if (statusCode == 429) return 'Too many entries added; try again later.';
     if (statusCode == 409) return 'That entry is already in the ledger.';
     return 'That request could not be completed.';

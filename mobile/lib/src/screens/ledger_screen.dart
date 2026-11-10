@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/models.dart';
 import '../providers.dart';
+import '../server_controller.dart';
+import '../share.dart';
 import '../utils.dart';
 import '../widgets/common.dart';
 import '../widgets/entry_card.dart';
@@ -85,9 +87,20 @@ class _LedgerScreenState extends ConsumerState<LedgerScreen> {
     final entry = await showLogMisspellingSheet(context);
     if (entry == null || !mounted) return;
     await ref.read(ledgerProvider.notifier).acceptCreated(entry);
-    if (mounted) {
-      showVandykeSnack(context, '“${entry.word}” added to the ledger.');
-    }
+    if (!mounted) return;
+    final serverUrl = ref.read(serverControllerProvider).serverUrl;
+    showVandykeSnack(
+      context,
+      '“${entry.word}” added to the ledger.',
+      action: SnackBarAction(
+        label: 'Share',
+        onPressed: () => shareEntryPermalink(
+          serverUrl: serverUrl,
+          entryId: entry.id,
+          sharer: ref.read(urlSharerProvider),
+        ),
+      ),
+    );
   }
 
   String _subtitle(LedgerState state) {
