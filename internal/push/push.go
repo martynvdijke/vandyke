@@ -10,7 +10,7 @@ package push
 import (
 	"bytes"
 	"context"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -102,7 +102,10 @@ func NewFCM(cfg FCMConfig, httpClient *http.Client) (*FCM, error) {
 		return nil, err
 	}
 
-	creds, err := google.CredentialsFromJSON(context.Background(), payload, fcmScope)
+	creds, err := google.CredentialsFromJSONWithTypeAndParams(
+		context.Background(), payload, google.ServiceAccount,
+		google.CredentialsParams{Scopes: []string{fcmScope}},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("push: parse FCM credentials: %w", err)
 	}
@@ -373,7 +376,7 @@ func NewWebPush(cfg WebPushConfig, httpClient *http.Client) (*WebPush, error) {
 	if err != nil || len(pub) != 65 {
 		return nil, errors.New("push: VAPID public key is not an uncompressed P-256 point")
 	}
-	if x, y := elliptic.Unmarshal(elliptic.P256(), pub); x == nil || y == nil {
+	if _, err := ecdh.P256().NewPublicKey(pub); err != nil {
 		return nil, errors.New("push: VAPID public key is not on the P-256 curve")
 	}
 
@@ -400,14 +403,7 @@ type webPayload struct {
 // message. It is exported so callers (and tests) can inspect exactly what a
 // service worker will receive.
 func MarshalPayload(n Notification) ([]byte, error) {
-	return json.Marshal(webPayload{
-		Title: n.Title,
-		Body:  n.Body,
-		URL:   n.URL,
-		Tag:   n.Tag,
-		Icon:  n.Icon,
-		Data:  n.Data,
-	})
+	return json.Marshal(webPayload(n))
 }
 
 // Send delivers n to each subscription and returns one Result per subscription

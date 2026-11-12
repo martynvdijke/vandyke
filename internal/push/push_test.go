@@ -2,7 +2,7 @@ package push
 
 import (
 	"context"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -328,11 +328,11 @@ func TestMarshalPayload(t *testing.T) {
 // key pair so the webpush library can encrypt to it.
 func testSubscriptionKeys(t *testing.T) (p256dh, auth string) {
 	t.Helper()
-	_, x, y, err := elliptic.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	pub := elliptic.Marshal(elliptic.P256(), x, y)
+	pub := key.PublicKey().Bytes()
 	authBytes := make([]byte, 16)
 	if _, err := rand.Read(authBytes); err != nil {
 		t.Fatalf("generate auth: %v", err)
