@@ -1,0 +1,23 @@
+{{define "slip"}}
+<section class="slip" aria-labelledby="slip-title" data-slip>
+  <div class="slip-head">
+    <p class="slip-kicker">Slip of the day<span class="dot" aria-hidden="true">·</span><time datetime="{{.Slip.Date}}">{{formatDate .Slip.Entry.CreatedAt}}</time></p>
+    <h2 id="slip-title" class="slip-title">One slip, picked for today</h2>
+  </div>
+  <div class="slip-body">
+    <div class="slip-text">
+      {{if .Slip.Entry.Word}}<p class="slip-word">{{.Slip.Entry.Word}}</p>{{else}}<p class="slip-word slip-word-photo">Photo entry</p>{{end}}
+      {{if .Slip.Entry.Meaning}}<p class="slip-meaning"><span class="arrow" aria-hidden="true">→</span> <span class="right">{{.Slip.Entry.Meaning}}</span></p>{{end}}
+      <p class="slip-meta">
+        {{if .Slip.Entry.Person}}<span class="person-chip">{{.Slip.Entry.Person}}</span>{{end}}
+        <a class="slip-link" href="/e/{{.Slip.Entry.ID}}">Open entry {{entryNo .Slip.Entry.ID}} <span aria-hidden="true">→</span></a>
+      </p>
+    </div>
+    {{if .Slip.Entry.PhotoURL}}
+    <a class="slip-photo" href="/e/{{.Slip.Entry.ID}}" aria-label="Open the slip of the day">
+      <img src="{{.Slip.Entry.PhotoURL}}?size=thumb" alt="Photo attached to entry {{entryNo .Slip.Entry.ID}}" loading="lazy" decoding="async">
+    </a>
+    {{end}}
+  </div>
+</section>
+{{end}}

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,7 +160,7 @@ func TestSearchFiltersYearsAndIndexUpdates(t *testing.T) {
 		t.Fatalf("years = %v, want 2020 included", years)
 	}
 
-	if _, err := st.UpdateEntry(ctx, EntryUpdate{ID: typoID, Word: "nieuw", Meaning: "new"}); err != nil {
+	if _, _, err := st.UpdateEntry(ctx, EntryUpdate{ID: typoID, Word: "nieuw", Meaning: "new"}); err != nil {
 		t.Fatalf("UpdateEntry: %v", err)
 	}
 	page, err = st.ListEntries(ctx, ListParams{Query: "euten"})
@@ -324,7 +325,7 @@ func TestNormalizeListParams(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := NormalizeListParams(tc.in); got != tc.want {
+			if got := NormalizeListParams(tc.in); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("NormalizeListParams(%+v) = %+v, want %+v", tc.in, got, tc.want)
 			}
 		})
@@ -385,7 +386,7 @@ func TestCreateEntryRejectsDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry other: %v", err)
 	}
-	if _, err := st.UpdateEntry(ctx, EntryUpdate{ID: other.ID, Word: "dubbel", Meaning: "DUBBEL"}); !errors.Is(err, ErrDuplicate) {
+	if _, _, err := st.UpdateEntry(ctx, EntryUpdate{ID: other.ID, Word: "dubbel", Meaning: "DUBBEL"}); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("duplicate UpdateEntry error = %v, want ErrDuplicate", err)
 	}
 
@@ -704,7 +705,7 @@ func TestUpdateEntryFieldsAndPhoto(t *testing.T) {
 		t.Fatalf("CreateEntry: %v", err)
 	}
 	when := time.Date(2019, 4, 5, 12, 30, 0, 0, time.UTC)
-	updated, err := st.UpdateEntry(ctx, EntryUpdate{
+	_, updated, err := st.UpdateEntry(ctx, EntryUpdate{
 		ID: entry.ID, Word: " wrong2 ", Meaning: " right2 ", CreatedAt: when,
 	})
 	if err != nil {
@@ -718,7 +719,7 @@ func TestUpdateEntryFieldsAndPhoto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhoto: %v", err)
 	}
-	updated, err = st.UpdateEntry(ctx, EntryUpdate{ID: entry.ID, Photo: photo})
+	_, updated, err = st.UpdateEntry(ctx, EntryUpdate{ID: entry.ID, Photo: photo})
 	if err != nil {
 		t.Fatalf("UpdateEntry photo: %v", err)
 	}
@@ -729,7 +730,7 @@ func TestUpdateEntryFieldsAndPhoto(t *testing.T) {
 		t.Fatalf("GetEntryPhoto: %v", err)
 	}
 
-	updated, err = st.UpdateEntry(ctx, EntryUpdate{ID: entry.ID, Word: "wrong2", Meaning: "right2", RemovePhoto: true})
+	_, updated, err = st.UpdateEntry(ctx, EntryUpdate{ID: entry.ID, Word: "wrong2", Meaning: "right2", RemovePhoto: true})
 	if err != nil {
 		t.Fatalf("UpdateEntry remove photo: %v", err)
 	}
@@ -776,7 +777,7 @@ func TestEntryPersonCreateFilterUpdateAndList(t *testing.T) {
 		t.Fatalf("person filter = %+v, want only Alice entry", page)
 	}
 
-	updated, err := st.UpdateEntry(ctx, EntryUpdate{
+	_, updated, err := st.UpdateEntry(ctx, EntryUpdate{
 		ID: alice.ID, Word: "alice-word", Meaning: "alice-meaning", Person: "  Carol  ",
 	})
 	if err != nil {
@@ -816,12 +817,12 @@ func TestSoftDeleteEntriesRetainPhotoAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	n, err := st.SoftDeleteEntries(ctx, []int64{entry.ID, entry.ID, 0})
+	removed, err := st.SoftDeleteEntries(ctx, []int64{entry.ID, entry.ID, 0})
 	if err != nil {
 		t.Fatalf("SoftDeleteEntries: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("soft deleted = %d, want 1", n)
+	if len(removed) != 1 || removed[0].ID != entry.ID {
+		t.Fatalf("soft deleted = %+v, want exactly the requested entry", removed)
 	}
 	// A trashed entry keeps its photo until it is purged.
 	if _, err := st.GetEntryPhoto(ctx, entry.ID); err != nil {

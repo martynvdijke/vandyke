@@ -1,0 +1,38 @@
+{{define "photos-batch"}}{{range .Tiles}}<a class="gallery-tile" href="{{.DisplayURL}}" data-lightbox-src="{{.DisplayURL}}" data-lightbox-alt="{{.Alt}}" data-lightbox-caption="{{.Caption}}"><img class="gallery-img" src="{{.ThumbURL}}" alt="{{.Alt}}" loading="lazy" decoding="async"><span class="gallery-caption">{{.Caption}}</span></a>{{end}}{{if .NextURL}}<a class="gallery-sentinel" href="{{.NextURL}}" hx-get="{{.NextURL}}" hx-target="this" hx-swap="outerHTML" hx-trigger="revealed">Load more photographs <span aria-hidden="true">↓</span></a>{{else}}<p class="gallery-end">You have reached the end of the gallery. <a href="/photos">Back to the newest photographs</a></p>{{end}}{{end}}
+
+{{define "photos-page"}}{{template "page-head" .}}
+  <main class="page photos-page" id="content" tabindex="-1">
+    <section class="photos-hero">
+      <p class="eyebrow">The photographic ledger</p>
+      <h1 class="photos-title">Photographs</h1>
+      <p class="photos-lede">{{if .Total}}{{.Total}} {{if eq .Total 1}}photograph is{{else}}photographs are{{end}} in the ledger, newest first. Every tile is a link; the full image opens in place.{{else}}The gallery is empty.{{end}}</p>
+    </section>
+
+    {{if .Total}}
+    <div class="gallery-grid" id="photos">
+      {{template "photos-batch" .}}
+    </div>
+
+    <nav class="gallery-nav" aria-label="Gallery batches">
+      {{if .Cursor}}<a class="btn btn-ghost" href="{{.PrevURL}}" rel="prev">← Previous batch</a>{{end}}
+      <a class="btn btn-ghost" href="/photos">Start from the beginning</a>
+      {{if .NextURL}}<a class="btn btn-ghost" href="{{.NextURL}}" rel="next">Next batch →</a>{{end}}
+    </nav>
+    {{else}}
+    <div class="empty">
+      <p class="empty-title">No photographs yet</p>
+      <p class="empty-text">No live entry carries a photograph. Add a slip with a photo and it will appear here.</p>
+      <a class="btn btn-ghost" href="/entries">Browse the ledger</a>
+    </div>
+    {{end}}
+  </main>
+
+  <dialog id="photo-lightbox" class="dialog lightbox" aria-label="Photograph">
+    <div class="lightbox-inner">
+      <button class="lightbox-close" type="button" data-dialog-close aria-label="Close photograph">×</button>
+      <img class="lightbox-img" alt="" decoding="async">
+      <p class="lightbox-caption"></p>
+    </div>
+  </dialog>
+
+{{template "page-foot" .}}{{end}}

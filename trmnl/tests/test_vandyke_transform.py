@@ -1,4 +1,4 @@
-"""Tests for the four vanDyke TRMNL transforms.
+"""Tests for the five vanDyke TRMNL transforms.
 
 Run with: python3 trmnl/tests/test_vandyke_transform.py
 """
@@ -25,6 +25,7 @@ stats_mod = _load("vandyke-stats")
 latest_mod = _load("vandyke-latest")
 photo_mod = _load("vandyke-photo")
 dashboard_mod = _load("vandyke-dashboard")
+slip_mod = _load("vandyke-slip")
 
 
 class _Resp:
@@ -49,8 +50,7 @@ STATS = {
     "entries_last_30_days": 4,
 }
 
-ENTRIES = {
-    "items": [
+ENTRIES = {    "items": [
         {
             "id": 105,
             "word": "feutenreus",
@@ -79,12 +79,37 @@ ENTRIES = {
 }
 
 
+SLIP = {
+    "date": "2026-11-11",
+    "entry": {
+        "id": 105,
+        "word": "feutenreus",
+        "meaning": "feature",
+        "person": "Marieke",
+        "created_at": "2026-03-13T22:07:21Z",
+    },
+}
+
+SLIP_PHOTO_ONLY = {
+    "date": "2026-11-11",
+    "entry": {
+        "id": 104,
+        "word": "",
+        "meaning": "",
+        "created_at": "2026-03-12T10:00:00Z",
+        "photo_url": "/api/v1/entries/104/photo",
+    },
+}
+
+
 def _url_of(url):
     return getattr(url, "full_url", str(url))
 
 
 def _fake(url, timeout=None):
     target = _url_of(url)
+    if "/api/v1/slip" in target:
+        return _Resp(SLIP)
     if "/api/v1/stats" in target:
         return _Resp(STATS)
     if "/api/v1/entries" in target:
@@ -158,6 +183,42 @@ class PhotoTest(unittest.TestCase):
             out = photo_mod.run(_input())
         self.assertFalse(out["has_photo"])
         self.assertIn("message", out)
+
+
+class SlipTest(unittest.TestCase):
+    @mock.patch("urllib.request.urlopen", _fake)
+    def test_slip(self):
+        out = slip_mod.run(_input())
+        self.assertEqual(out["date"], "11 Nov 2026")
+        self.assertEqual(out["word"], "feutenreus")
+        self.assertEqual(out["meaning"], "feature")
+        self.assertEqual(out["person"], "Marieke")
+        self.assertEqual(out["photo_url"], "")
+        self.assertFalse(out["has_photo"])
+
+    @mock.patch("urllib.request.urlopen", lambda *a, **k: _Resp(SLIP_PHOTO_ONLY))
+    def test_photo_only_slip(self):
+        out = slip_mod.run(_input())
+        self.assertEqual(out["word"], "")
+        self.assertEqual(out["meaning"], "")
+        self.assertTrue(out["has_photo"])
+        self.assertEqual(
+            out["photo_url"],
+            "https://vandyke.example.com/api/v1/entries/104/photo",
+        )
+
+    def test_missing_url(self):
+        out = slip_mod.run(_input(""))
+        self.assertIn("error", out)
+
+    def test_invalid_url(self):
+        out = slip_mod.run(_input("vandyke.example.com"))
+        self.assertIn("error", out)
+
+    @mock.patch("urllib.request.urlopen", side_effect=OSError("down"))
+    def test_unreachable(self, *_):
+        out = slip_mod.run(_input())
+        self.assertIn("error", out)
 
 
 class DashboardTest(unittest.TestCase):

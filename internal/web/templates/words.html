@@ -1,0 +1,58 @@
+{{define "words-page"}}{{template "page-head" .}}
+  <main class="page words-page" id="content" tabindex="-1">
+    <section class="words-hero">
+      <p class="eyebrow">The dictionary</p>
+      <h1 class="words-title">Words</h1>
+      <p class="words-lede">Every distinct misspelling in the ledger, grouped case-insensitively. Pick a letter to read one bucket; each spelling links to its newest slip.</p>
+    </section>
+
+    <nav class="word-rail" aria-label="Letters of the index">
+      {{range .Rail}}{{if .Empty}}<span class="word-letter is-empty" aria-disabled="true">{{.Letter}}<span class="word-letter-count">0</span></span>{{else}}<a class="word-letter{{if .Active}} is-active{{end}}" href="{{.Href}}"{{if .Active}} aria-current="page"{{end}}>{{.Letter}}<span class="word-letter-count">{{.Count}}</span></a>{{end}}{{end}}
+    </nav>
+
+    {{if .Empty}}
+    <div class="empty">
+      <p class="empty-title">The index is empty</p>
+      <p class="empty-text">No live entry carries a misspelling yet. The rail will fill as slips are written down.</p>
+    </div>
+    {{else}}
+    <section class="word-bucket" aria-labelledby="word-bucket-title">
+      <h2 id="word-bucket-title" class="word-bucket-title">{{.Active}} <span class="word-bucket-count">{{.BucketTotal}} {{if eq .BucketTotal 1}}spelling{{else}}spellings{{end}}</span></h2>
+      <ol class="word-list">
+        {{range .Rows}}
+        <li class="word-row">
+          <a class="word-spelling" href="/e/{{.NewestID}}">{{.Word}}</a>
+          <span class="word-count" title="Entries carrying this spelling">{{.Count}}×</span>
+          <span class="word-dates"><time datetime="{{.FirstAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate .FirstAt}}</time><span class="word-dates-dash" aria-hidden="true">–</span><time datetime="{{.LastAt.Format "2006-01-02T15:04:05Z"}}">{{formatDate .LastAt}}</time></span>
+        </li>
+        {{end}}
+      </ol>
+
+      {{if gt .Pages 1}}
+      <nav class="pager" aria-label="Word pages">
+        {{if .PrevURL}}
+          <a class="page-btn page-edge" href="{{.PrevURL}}" rel="prev">← Prev</a>
+        {{else}}
+          <span class="page-btn page-edge is-disabled">← Prev</span>
+        {{end}}
+        <span class="page-nums">
+          {{range .PageLinks}}{{if .Gap}}<span class="page-gap" aria-hidden="true">…</span>{{else}}<a class="page-btn page-num{{if .Active}} is-active{{end}}" href="{{.URL}}"{{if .Active}} aria-current="page"{{end}}>{{.Num}}</a>{{end}}{{end}}
+        </span>
+        {{if .NextURL}}
+          <a class="page-btn page-edge" href="{{.NextURL}}" rel="next">Next →</a>
+        {{else}}
+          <span class="page-btn page-edge is-disabled">Next →</span>
+        {{end}}
+      </nav>
+      {{end}}
+    </section>
+    {{end}}
+
+    {{if .PhotoOnly}}
+    <p class="words-photo-note">
+      {{if eq .PhotoOnly 1}}One slip has{{else}}{{.PhotoOnly}} slips have{{end}} only a photograph and no misspelling, so {{if eq .PhotoOnly 1}}it is{{else}}they are{{end}} not in the index.
+      <a href="/photos">Browse the photographs</a>.
+    </p>
+    {{end}}
+  </main>
+{{template "page-foot" .}}{{end}}

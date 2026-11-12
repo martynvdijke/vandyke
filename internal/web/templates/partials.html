@@ -23,6 +23,7 @@
           {{if $entry.PhotoURL}}<a class="entry-photo" href="{{$entry.PhotoURL}}?size=display" target="_blank" rel="noopener" title="Open photo"><img src="{{$entry.PhotoURL}}?size=thumb" alt="Photo attached to entry {{entryNo $entry.ID}}" loading="lazy" decoding="async"></a>{{end}}
           {{if $entry.Word}}<span class="wrong">{{if $.Ledger.Query.Highlight}}{{$entry.WordHTML}}{{else}}{{$entry.Word}}{{end}}</span>{{end}}
           {{if $entry.Person}}<span class="person-chip">{{$entry.Person}}</span>{{end}}
+          {{range $entry.Tags}}<a class="tag-chip" href="/entries?tag={{.Slug}}">{{.Name}}</a>{{end}}
         </span>
         <span class="col-meaning" role="cell">
           {{if $entry.Meaning}}<span class="arrow" aria-hidden="true">→</span><span class="right">{{if $.Ledger.Query.Highlight}}{{$entry.MeaningHTML}}{{else}}{{$entry.Meaning}}{{end}}</span>{{else}}<span class="photo-note">photo entry</span>{{end}}
@@ -55,7 +56,7 @@
   <div class="empty">
     <p class="empty-title">Nothing found</p>
     <p class="empty-text">No entry matches {{if .Ledger.Query.Q}}“{{.Ledger.Query.Q}}”{{else}}your search{{end}} — maybe it is still waiting to be written down.</p>
-    <a class="btn btn-ghost" href="/entries" hx-get="/entries" hx-target="#ledger" hx-swap="outerHTML">Clear search</a>
+    <a class="btn btn-ghost" href="{{.Ledger.BasePath}}" hx-get="{{.Ledger.BasePath}}" hx-target="#ledger" hx-swap="outerHTML">Clear search</a>
   </div>
   {{end}}
 </section>

@@ -149,37 +149,112 @@
       if (addDialog) addDialog.addEventListener("close", clearPhotoPreview);
     }
 
-    /* permalink copy button */
-    document.querySelectorAll("[data-copy-link]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        var value = button.getAttribute("data-copy-link") || window.location.href;
+    /* permalink share control: Web Share API, then the clipboard */
+    function copyText(value, done, failed) {
+      function fallback() {
+        var input = document.createElement("input");
+        input.value = value;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        var ok = false;
+        try {
+          ok = document.execCommand("copy");
+        } catch (err) {
+          ok = false;
+        }
+        input.remove();
+        if (ok) done();
+        else failed();
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(done, fallback);
+      } else {
+        fallback();
+      }
+    }
+
+    document.querySelectorAll("[data-share-url]").forEach(function (link) {
+      var label = link.textContent;
+      var timer = null;
+      link.addEventListener("click", function (event) {
+        var url = link.getAttribute("data-share-url") || link.href || window.location.href;
+        var title = link.getAttribute("data-share-title") || document.title;
+        var text = link.getAttribute("data-share-text") || "";
         function copied() {
           toast("Link copied.");
-          track("permalink-copy", { url: value });
+          track("permalink-copy", { url: url });
+          link.textContent = "Link copied";
+          window.clearTimeout(timer);
+          timer = window.setTimeout(function () {
+            link.textContent = label;
+          }, 2000);
         }
-        function fallback() {
-          var input = document.createElement("input");
-          input.value = value;
-          input.setAttribute("readonly", "");
-          input.style.position = "fixed";
-          input.style.opacity = "0";
-          document.body.appendChild(input);
-          input.select();
-          try {
-            document.execCommand("copy");
-            copied();
-          } catch (err) {
-            toast("Copy failed — select the address bar instead.");
-          }
-          input.remove();
+        function failed() {
+          toast("Copy failed — select the address bar instead.");
         }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(value).then(copied, fallback);
-        } else {
-          fallback();
+        if (typeof navigator.share === "function") {
+          event.preventDefault();
+          navigator.share({ title: title, text: text, url: url }).then(function () {
+            track("permalink-share", { url: url });
+          }, function (err) {
+            if (err && err.name === "AbortError") return;
+            copyText(url, copied, failed);
+          });
+          return;
         }
+        event.preventDefault();
+        copyText(url, copied, failed);
       });
     });
+
+    /* slip of the day: hidden while a search term or filter is active */
+    var slipSection = document.querySelector("[data-slip]");
+    var toolbar = document.getElementById("search-form");
+    if (slipSection && toolbar) {
+      var updateSlip = function () {
+        var active = false;
+        ["q", "person", "year", "from", "to"].forEach(function (name) {
+          var field = toolbar.querySelector('[name="' + name + '"]');
+          if (field && String(field.value || "").trim() !== "") active = true;
+        });
+        var photo = toolbar.querySelector('[name="photo"]');
+        if (photo && photo.checked) active = true;
+        slipSection.hidden = active;
+      };
+      toolbar.addEventListener("input", updateSlip);
+      toolbar.addEventListener("change", updateSlip);
+      toolbar.addEventListener("search", updateSlip);
+      updateSlip();
+    }
+
+    /* photo gallery lightbox: one native dialog, filled only when it opens */
+    var lightbox = document.getElementById("photo-lightbox");
+    var lightboxImg = lightbox ? lightbox.querySelector(".lightbox-img") : null;
+    var lightboxCaption = lightbox ? lightbox.querySelector(".lightbox-caption") : null;
+    var lightboxOpener = null;
+
+    if (lightbox) {
+      document.addEventListener("click", function (event) {
+        var trigger = event.target && event.target.closest ? event.target.closest("[data-lightbox-src]") : null;
+        if (!trigger || typeof lightbox.showModal !== "function") return;
+        event.preventDefault();
+        lightboxOpener = trigger;
+        if (lightboxImg) {
+          lightboxImg.src = trigger.getAttribute("data-lightbox-src") || "";
+          lightboxImg.alt = trigger.getAttribute("data-lightbox-alt") || "";
+        }
+        if (lightboxCaption) lightboxCaption.textContent = trigger.getAttribute("data-lightbox-caption") || "";
+        lightbox.showModal();
+      });
+      lightbox.addEventListener("close", function () {
+        if (lightboxImg) lightboxImg.removeAttribute("src");
+        if (lightboxOpener && typeof lightboxOpener.focus === "function") lightboxOpener.focus();
+        lightboxOpener = null;
+      });
+    }
 
     /* server-rendered toast after a no-JS form post */
     document.querySelectorAll(".toast-server").forEach(function (el) {

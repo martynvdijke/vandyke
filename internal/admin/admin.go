@@ -47,7 +47,7 @@ type Admin struct {
 	tmpl         *template.Template
 	oidc         *auth.OIDC
 	loginLimiter *ratelimit.Limiter
-	hooks        *webhook.Dispatcher
+	hooks        *webhook.Engine
 
 	// sweepMu guards lastSweep, which rate-limits the opportunistic expired
 	// session sweep performed by requireAuth.
@@ -63,7 +63,7 @@ type requestState struct {
 }
 
 // New prepares templates, the optional OIDC client and login limiter.
-func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.Config, logger *slog.Logger) (*Admin, error) {
+func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.Config, hooks *webhook.Engine, logger *slog.Logger) (*Admin, error) {
 	funcs := template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			if t.IsZero() {
@@ -99,7 +99,7 @@ func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.C
 		logger:       logger,
 		tmpl:         tmpl,
 		loginLimiter: ratelimit.NewPerMinute(cfg.AdminLoginRatePerMinute, cfg.AdminLoginRateBurst),
-		hooks:        webhook.New(stg.CurrentWebhook, logger),
+		hooks:        hooks,
 	}
 	if cfg.OIDC.Enabled() {
 		a.oidc, err = auth.NewOIDC(ctx, auth.OIDCConfig{
@@ -129,10 +129,24 @@ func (a *Admin) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/trash", a.requireAuth(a.handleTrash))
 	mux.HandleFunc("POST /admin/trash/restore", a.withCSRF(maxAdminFormBytes, a.handleTrashRestore))
 	mux.HandleFunc("POST /admin/trash/purge", a.withOwnerCSRF(maxAdminFormBytes, a.handleTrashPurge))
+	mux.HandleFunc("GET /admin/tags", a.requireAuth(a.handleTags))
+	mux.HandleFunc("POST /admin/tags", a.withCSRF(maxAdminFormBytes, a.handleTagCreate))
+	mux.HandleFunc("POST /admin/tags/{id}", a.withCSRF(maxAdminFormBytes, a.handleTagUpdate))
+	mux.HandleFunc("POST /admin/tags/{id}/delete", a.withOwnerCSRF(maxAdminFormBytes, a.handleTagDelete))
 	mux.HandleFunc("GET /admin/settings", a.requireAuth(a.handleSettings))
 	mux.HandleFunc("POST /admin/settings", a.withCSRF(maxAdminFormBytes, a.handleSaveSettings))
 	mux.HandleFunc("POST /admin/search/rebuild", a.withCSRF(maxAdminFormBytes, a.handleSearchRebuild))
 	mux.HandleFunc("POST /admin/settings/webhook/test", a.withCSRF(maxAdminFormBytes, a.handleWebhookTestFire))
+
+	mux.HandleFunc("GET /admin/webhooks", a.requireAuth(a.handleWebhooks))
+	mux.HandleFunc("POST /admin/webhooks", a.withCSRF(maxAdminFormBytes, a.handleWebhookCreate))
+	mux.HandleFunc("POST /admin/webhooks/adopt", a.withCSRF(maxAdminFormBytes, a.handleWebhookAdopt))
+	mux.HandleFunc("POST /admin/webhooks/prune", a.withOwnerCSRF(maxAdminFormBytes, a.handleWebhookPrune))
+	mux.HandleFunc("POST /admin/webhooks/{id}", a.withCSRF(maxAdminFormBytes, a.handleWebhookUpdate))
+	mux.HandleFunc("POST /admin/webhooks/{id}/toggle", a.withCSRF(maxAdminFormBytes, a.handleWebhookToggle))
+	mux.HandleFunc("POST /admin/webhooks/{id}/delete", a.withOwnerCSRF(maxAdminFormBytes, a.handleWebhookDelete))
+	mux.HandleFunc("POST /admin/webhooks/{id}/test", a.withCSRF(maxAdminFormBytes, a.handleWebhookTest))
+	mux.HandleFunc("POST /admin/webhooks/deliveries/{id}/retry", a.withCSRF(maxAdminFormBytes, a.handleWebhookDeliveryRetry))
 
 	mux.HandleFunc("GET /admin/admins", a.requireOwner(a.handleAdmins))
 	mux.HandleFunc("POST /admin/admins", a.withOwnerCSRF(maxAdminFormBytes, a.handleAdminCreate))

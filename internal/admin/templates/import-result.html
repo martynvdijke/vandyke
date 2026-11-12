@@ -4,7 +4,7 @@
   <div>
     <p class="eyebrow">Transfer</p>
     <h1>{{if .Preview}}Import preview{{else}}Import result{{end}}</h1>
-    <p class="admin-lede">{{if .Preview}}No row was written. Run the same file with mode=apply to import it.{{else}}The file was processed in a single transaction.{{end}}</p>
+    <p class="admin-lede">{{if .Preview}}No row was written. Run the same file with mode=apply to import it.{{else}}The file was processed in a single transaction. Import is a reconciliation action and does not emit webhook events; receivers should reconcile from the ledger API or an export.{{end}}</p>
   </div>
 </div>
 

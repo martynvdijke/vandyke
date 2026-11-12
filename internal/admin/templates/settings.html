@@ -50,15 +50,16 @@
 </section>
 
 <section class="admin-card admin-settings-card">
-  <h2>Webhook</h2>
-  <p class="admin-lede">When a target is configured the server posts one <code>entry.created</code> event after each successful addition. Delivery is best effort: it never delays the response and is not retried, so a receiver should de-duplicate on <code>id</code>.</p>
+  <h2>Legacy webhook target</h2>
+  <p class="admin-lede">This single target is a legacy compatibility path. It subscribes only to <code>entry.created</code> and is used only while no persisted endpoint is enabled. Named endpoints with event subscriptions, presets and durable retries live on the <a href="/admin/webhooks">Webhooks</a> page.</p>
+  {{if .WebhookSuppressed}}<p class="admin-flash" role="status">The legacy target is suppressed because an enabled persisted endpoint exists. <a href="/admin/webhooks">Manage endpoints</a>.</p>{{else if .WebhookActive}}<p class="admin-flash" role="status">The legacy target is active: no enabled persisted endpoint exists.</p>{{end}}
   <form method="post" action="/admin/settings" class="admin-form">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="settings_form" value="webhook">
     <label class="field">
       <span class="field-label">Webhook URL</span>
       <input type="url" name="webhook_url" value="{{.WebhookURL}}" placeholder="{{.WebhookEnvURL}}" autocomplete="off">
-      <span class="field-hint">Receives a JSON <code>POST</code>. Leave empty to disable dispatch. Falls back to <code>LEDGER_WEBHOOK_URL</code> when no stored value exists.</span>
+      <span class="field-hint">Receives a JSON <code>POST</code>. Leave empty to disable the legacy target. Falls back to <code>LEDGER_WEBHOOK_URL</code> when no stored value exists. Persisted endpoints take precedence while enabled.</span>
     </label>
     <label class="field">
       <span class="field-label">Signing secret <span class="field-optional">write-only</span></span>
@@ -78,7 +79,7 @@
   <form method="post" action="/admin/settings/webhook/test" class="admin-form">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <div class="admin-form-actions">
-      <button class="btn btn-ghost" type="submit">Send test event</button>
+      <button class="btn btn-ghost" type="submit">Send legacy test event</button>
     </div>
   </form>
   {{if .WebhookResult}}<p class="admin-flash" role="status">{{.WebhookResult}}</p>{{end}}

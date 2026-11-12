@@ -1,29 +1,30 @@
-// Package webhook delivers the optional entry-created notification to one
-// operator-configured endpoint. Delivery is best effort: production dispatch is
-// fire-and-forget and never delays or changes the create response.
+// Package webhook delivers entry lifecycle events to zero or more configured
+// endpoints. Delivery is best effort: production emission is non-blocking and
+// never delays or changes the caller's response. Failures are retried durably.
 package webhook
 
 import (
-	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
-	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/store"
 )
 
-// EventEntryCreated is the only event the server emits.
-const EventEntryCreated = "entry.created"
+// The five supported event names, re-exported from the store so the
+// persistence layer and the delivery engine cannot drift apart.
+const (
+	EventEntryCreated  = store.WebhookEventCreated
+	EventEntryUpdated  = store.WebhookEventUpdated
+	EventEntryDeleted  = store.WebhookEventDeleted
+	EventEntryRestored = store.WebhookEventRestored
+	EventEntryPurged   = store.WebhookEventPurged
+)
 
 // userAgent identifies the server on outbound deliveries.
 const userAgent = "vanDyke-ledger-webhook/1"
@@ -31,48 +32,52 @@ const userAgent = "vanDyke-ledger-webhook/1"
 // Timeout bounds one delivery attempt.
 const Timeout = 5 * time.Second
 
-// ErrNotConfigured is returned by Send when no effective URL is set.
+// ErrNotConfigured is returned when no legacy target is configured.
 var ErrNotConfigured = errors.New("no webhook configured")
 
-// Payload is the JSON body of a delivery.
+// Payload is the generic event envelope. The entry.created body contains
+// exactly the first seven keys; the four newer event types add occurred_at,
+// deleted_at and (for edits) changes.
 type Payload struct {
-	Event     string `json:"event"`
-	ID        int64  `json:"id"`
-	Word      string `json:"word"`
-	Meaning   string `json:"meaning"`
-	Person    string `json:"person"`
-	CreatedAt string `json:"created_at"`
-	URL       string `json:"url"`
+	Event      string                 `json:"event"`
+	ID         int64                  `json:"id"`
+	Word       string                 `json:"word"`
+	Meaning    string                 `json:"meaning"`
+	Person     string                 `json:"person"`
+	CreatedAt  string                 `json:"created_at"`
+	URL        string                 `json:"url"`
+	OccurredAt string                 `json:"occurred_at,omitempty"`
+	DeletedAt  string                 `json:"deleted_at,omitempty"`
+	Changes    map[string]FieldChange `json:"changes,omitempty"`
 }
 
-// Dispatcher holds the settings resolver, logger and HTTP client used for
-// deliveries. The effective URL and secret are read at send time so an admin
-// settings change applies without a restart.
-type Dispatcher struct {
-	resolve func() config.Webhook
-	client  *http.Client
-	logger  *slog.Logger
+// FieldChange is one edited field's previous and new value.
+type FieldChange struct {
+	From any `json:"from"`
+	To   any `json:"to"`
 }
 
-// New creates a dispatcher. A nil resolver yields a disabled dispatcher.
-func New(resolve func() config.Webhook, logger *slog.Logger) *Dispatcher {
-	if resolve == nil {
-		resolve = func() config.Webhook { return config.Webhook{} }
+// Change is one entry lifecycle event the caller wants delivered. Entry is the
+// snapshot after the change (or, for a purge, the last known row). BaseURL is
+// the absolute origin; the engine prefers its configured PUBLIC_BASE_URL.
+type Change struct {
+	Event   string
+	Entry   store.Entry
+	Changes map[string]FieldChange
+	BaseURL string
+}
+
+// ChangesFor builds one Change per entry for a bulk lifecycle action.
+func ChangesFor(event string, entries []store.Entry, base string) []Change {
+	changes := make([]Change, 0, len(entries))
+	for _, entry := range entries {
+		changes = append(changes, Change{Event: event, Entry: entry, BaseURL: base})
 	}
-	return &Dispatcher{
-		resolve: resolve,
-		client:  &http.Client{Timeout: Timeout},
-		logger:  logger,
-	}
+	return changes
 }
 
-// Enabled reports whether an effective URL is configured.
-func (d *Dispatcher) Enabled() bool {
-	return d != nil && d.resolve().Enabled()
-}
-
-// BuildPayload maps an entry to the delivery contract. permalink must be the
-// absolute {base}/e/{id} URL.
+// BuildPayload maps an entry to the frozen entry.created contract. permalink
+// must be the absolute {base}/e/{id} URL.
 func BuildPayload(entry store.Entry, permalink string) Payload {
 	return Payload{
 		Event:     EventEntryCreated,
@@ -85,80 +90,30 @@ func BuildPayload(entry store.Entry, permalink string) Payload {
 	}
 }
 
-// Dispatch starts one delivery in a bounded goroutine and returns immediately.
-// Failures are logged and never returned, so the caller's response cannot be
-// delayed or altered by the receiver.
-func (d *Dispatcher) Dispatch(payload Payload) {
-	if d == nil {
-		return
+// buildPayload renders the generic envelope for one change. entry.created is
+// frozen at seven keys; only newer event types carry occurred_at, and only a
+// trashed snapshot carries deleted_at.
+func buildPayload(change Change, base string, occurredAt time.Time) Payload {
+	payload := Payload{
+		Event:     change.Event,
+		ID:        change.Entry.ID,
+		Word:      change.Entry.Word,
+		Meaning:   change.Entry.Meaning,
+		Person:    change.Entry.Person,
+		CreatedAt: change.Entry.CreatedAt.UTC().Format(time.RFC3339),
+		URL:       strings.TrimRight(base, "/") + fmt.Sprintf("/e/%d", change.Entry.ID),
 	}
-	target := d.resolve()
-	if !target.Enabled() {
-		return
+	if change.Event == EventEntryCreated {
+		return payload
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		d.logger.Warn("encode webhook payload", "entry_id", payload.ID, "error", err)
-		return
+	payload.OccurredAt = occurredAt.UTC().Format(time.RFC3339)
+	if change.Entry.DeletedAt != nil {
+		payload.DeletedAt = change.Entry.DeletedAt.UTC().Format(time.RFC3339)
 	}
-	go d.deliver(target, payload.ID, body)
-}
-
-// deliver performs one POST. The body bytes handed in are the bytes that are
-// signed and sent.
-func (d *Dispatcher) deliver(target config.Webhook, entryID int64, body []byte) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
-
-	status, err := d.post(ctx, target, body)
-	switch {
-	case err != nil:
-		d.logger.Warn("webhook delivery failed", "entry_id", entryID, "host", hostOf(target.URL), "error", err)
-	case status < http.StatusOK || status >= http.StatusMultipleChoices:
-		d.logger.Warn("webhook delivery rejected", "entry_id", entryID, "host", hostOf(target.URL), "status", status)
+	if change.Event == EventEntryUpdated && len(change.Changes) > 0 {
+		payload.Changes = change.Changes
 	}
-}
-
-// Send performs one synchronous delivery, used by the admin test-fire action.
-// It returns the receiver's HTTP status.
-func (d *Dispatcher) Send(ctx context.Context, payload Payload) (int, error) {
-	if d == nil {
-		return 0, ErrNotConfigured
-	}
-	target := d.resolve()
-	if !target.Enabled() {
-		return 0, ErrNotConfigured
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return 0, fmt.Errorf("encode webhook payload: %w", err)
-	}
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, Timeout)
-		defer cancel()
-	}
-	return d.post(ctx, target, body)
-}
-
-func (d *Dispatcher) post(ctx context.Context, target config.Webhook, body []byte) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL, bytes.NewReader(body))
-	if err != nil {
-		return 0, fmt.Errorf("build webhook request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	if target.Secret != "" {
-		req.Header.Set("X-VanDyke-Signature", Signature(target.Secret, body))
-	}
-
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
-	return resp.StatusCode, nil
+	return payload
 }
 
 // Signature returns the sha256=<hex> HMAC-SHA256 digest of body keyed by secret.
@@ -168,7 +123,7 @@ func Signature(secret string, body []byte) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-// hostOf reports the URL host for logging without any embedded credentials.
+// hostOf reports the URL host without any embedded credentials, path or query.
 func hostOf(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {

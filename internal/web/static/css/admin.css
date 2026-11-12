@@ -538,3 +538,60 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* Webhook endpoint and delivery tables. */
+.webhook-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+}
+
+.webhook-table th,
+.webhook-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.webhook-table th {
+  background: var(--paper-deep);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.webhook-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.webhook-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.webhook-events {
+  font-size: 0.8rem;
+}
+
+.webhook-muted {
+  color: var(--ink-mute);
+}
+
+.webhook-events fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.webhook-events legend {
+  padding: 0;
+  margin-bottom: 0.4rem;
+}

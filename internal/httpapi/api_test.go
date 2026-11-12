@@ -26,10 +26,19 @@ import (
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/store"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func testEngine(t *testing.T, st *store.Store, cfg config.Webhook) *webhook.Engine {
+	t.Helper()
+	engine := webhook.NewEngine(st, func() config.Webhook { return cfg }, "", nil, discardLogger())
+	engine.Start()
+	t.Cleanup(engine.Close)
+	return engine
 }
 
 func newTestAPI(t *testing.T, limiter *ratelimit.Limiter) (*httptest.Server, *store.Store) {
@@ -41,7 +50,7 @@ func newTestAPI(t *testing.T, limiter *ratelimit.Limiter) (*httptest.Server, *st
 	t.Cleanup(func() { _ = st.Close() })
 
 	mux := http.NewServeMux()
-	New(st, limiter, false, "", func() config.Webhook { return config.Webhook{} }, discardLogger()).Register(mux)
+	New(st, limiter, false, "", testEngine(t, st, config.Webhook{}), nil, "", discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, st
@@ -492,7 +501,7 @@ func TestSecurityHeadersAppliedByMiddleware(t *testing.T) {
 	defer st.Close()
 
 	mux := http.NewServeMux()
-	New(st, ratelimit.New(1000, 100), false, "", func() config.Webhook { return config.Webhook{} }, discardLogger()).Register(mux)
+	New(st, ratelimit.New(1000, 100), false, "", testEngine(t, st, config.Webhook{}), nil, "", discardLogger()).Register(mux)
 	handler := httpx.SecurityHeaders("default-src 'self'")(mux)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -686,7 +695,7 @@ func TestListEntryDateFiltersAndPersonSearch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateEntry %q: %v", word, err)
 		}
-		updated, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
+		_, updated, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
 			ID: entry.ID, Word: word, Meaning: meaning, Person: person, CreatedAt: date(day),
 		})
 		if err != nil {
@@ -772,7 +781,7 @@ func TestCreateEntryDispatchesWebhook(t *testing.T) {
 
 	mux := http.NewServeMux()
 	New(st, ratelimit.New(1000, 100), false, "https://ledger.example",
-		func() config.Webhook { return config.Webhook{URL: receiver.URL, Secret: "apisecret"} },
+		testEngine(t, st, config.Webhook{URL: receiver.URL, Secret: "apisecret"}), nil, "",
 		discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

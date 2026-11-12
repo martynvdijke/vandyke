@@ -1,0 +1,168 @@
+{{define "year"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <meta name="description" content="{{.Description}}">
+  <link rel="canonical" href="{{.CanonicalURL}}">
+  <meta property="og:site_name" content="vanDyke">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="{{.RecapYear}} in review">
+  <meta property="og:description" content="{{.Description}}">
+  <meta property="og:url" content="{{.CanonicalURL}}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{.RecapYear}} in review">
+  <meta name="twitter:description" content="{{.Description}}">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">
+  <link rel="search" type="application/opensearchdescription+xml" title="vanDyke ledger search" href="/opensearch.xml">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="grain" aria-hidden="true"></div>
+
+  {{template "masthead" .}}
+
+  <main class="page stats-page year-page" id="content" tabindex="-1">
+    <section class="stats-hero">
+      <p class="eyebrow">Year in review</p>
+      <h1 class="stats-title">{{.RecapYear}} in review</h1>
+      <p class="stats-lede">{{.Total}} {{if eq .Total 1}}slip was{{else}}slips were{{end}} written down in {{.RecapYear}}. Here is what that year looked like, counted straight from the ledger.</p>
+    </section>
+
+    <section class="stats stats-figures" aria-label="Key figures">
+      <div class="stat">
+        <span class="stat-value">{{.Total}}</span>
+        <span class="stat-label">{{if eq .Total 1}}slip in the year{{else}}slips in the year{{end}}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.BusiestMonth}}</span>
+        <span class="stat-label">busiest month, with {{.BusiestMonthCount}}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.WithPhoto}}</span>
+        <span class="stat-label">carry a photograph</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{.PhotoPct}}<span class="stat-unit">%</span></span>
+        <span class="stat-label">of the year has a photo</span>
+      </div>
+    </section>
+
+    <div class="stats-columns">
+      <div class="stats-col">
+        <section class="panel span-panel" aria-labelledby="year-span-title">
+          <p class="panel-kicker">The span</p>
+          <h2 id="year-span-title" class="panel-title">First and last slip</h2>
+          {{if .First}}
+          <p class="span-dates">
+            <a class="span-date" href="/e/{{.First.ID}}">{{if .First.Word}}{{.First.Word}}{{else}}Photo entry{{end}}</a>
+            <span class="span-arrow" aria-hidden="true">→</span>
+            <a class="span-date" href="/e/{{.Last.ID}}">{{if .Last.Word}}{{.Last.Word}}{{else}}Photo entry{{end}}</a>
+          </p>
+          <p class="span-note">The first was logged {{formatDate .First.CreatedAt}}{{if .First.Meaning}} as “{{.First.Meaning}}”{{end}}. The last arrived {{formatDate .Last.CreatedAt}}{{if .Last.Meaning}}, correcting it to “{{.Last.Meaning}}”{{end}}.</p>
+          {{else}}
+          <p class="span-note">No dates have been recorded for this year.</p>
+          {{end}}
+        </section>
+
+        <section class="panel chart-panel" aria-labelledby="year-months-title">
+          <p class="panel-kicker">By month</p>
+          <h2 id="year-months-title" class="panel-title">Slips by month</h2>
+          <figure class="chart-figure" aria-hidden="true">
+            <ol class="bars is-fitted" style="--cols:12" aria-hidden="true">
+              {{range .Months}}
+              <li class="bar-col{{if eq .Count 0}} is-quiet{{end}}">
+                <span class="bar-count">{{.Count}}</span>
+                <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="height:{{.Height}}%"></span></span>
+                <span class="bar-year">{{.Name}}</span>
+              </li>
+              {{end}}
+            </ol>
+            <figcaption class="chart-legend">
+              <span class="legend-mark" aria-hidden="true"></span> {{.RecapYear}} by month
+            </figcaption>
+          </figure>
+          <table class="visually-hidden">
+            <caption>Entries per month in {{.RecapYear}}</caption>
+            <thead><tr><th scope="col">Month</th><th scope="col">Entries</th></tr></thead>
+            <tbody>
+              {{range .Months}}<tr><th scope="row">{{.Name}}</th><td>{{.Count}}</td></tr>{{end}}
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div class="stats-col">
+        <section class="panel persons-panel" aria-labelledby="year-persons-title">
+          <p class="panel-kicker">By name</p>
+          <h2 id="year-persons-title" class="panel-title">Most frequent slips</h2>
+          <p class="panel-sub">The five names written on the most slips that year.</p>
+          {{if .Persons}}
+          <ol class="person-bars" aria-hidden="true">
+            {{range .Persons}}
+            <li class="person-bar">
+              <span class="pb-head">
+                <span class="pb-name">{{.Person}}</span>
+                <span class="pb-count">{{.Count}}</span>
+              </span>
+              <span class="pb-track" aria-hidden="true"><span class="pb-fill" style="width:{{.Width}}%"></span></span>
+            </li>
+            {{end}}
+          </ol>
+          <table class="visually-hidden">
+            <caption>Slips per person in {{.RecapYear}}</caption>
+            <thead><tr><th scope="col">Name</th><th scope="col">Slips</th></tr></thead>
+            <tbody>
+              {{range .Persons}}<tr><th scope="row">{{.Person}}</th><td>{{.Count}}</td></tr>{{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="panel-note">No slip in {{.RecapYear}} was signed with a name.</p>
+          {{end}}
+        </section>
+
+        <section class="panel" aria-labelledby="year-longest-title">
+          <p class="panel-kicker">The longest</p>
+          <h2 id="year-longest-title" class="panel-title">Longest misspelling</h2>
+          {{if .Longest}}
+          <p class="year-longest"><a href="/e/{{.Longest.ID}}">{{.Longest.Word}}</a> <span class="arrow" aria-hidden="true">→</span> <span class="right">{{.Longest.Meaning}}</span></p>
+          <p class="panel-note">Logged {{formatDate .Longest.CreatedAt}}{{if .Longest.Person}} by {{.Longest.Person}}{{end}}.</p>
+          {{else}}
+          <p class="panel-note">No misspelling was long enough to name — every entry that year is a photograph or has an empty misspelling.</p>
+          {{end}}
+        </section>
+
+        <section class="panel ledger-panel" aria-labelledby="year-links-title">
+          <p class="panel-kicker">Keep reading</p>
+          <h2 id="year-links-title" class="panel-title">The whole ledger</h2>
+          <p class="panel-sub">Every figure on this page was computed from the same table the ledger is drawn from.</p>
+          <p class="panel-links">
+            <a href="{{.LedgerHref}}">All {{.RecapYear}} entries</a>
+            <a href="/stats">All statistics</a>
+            <a href="/tags">Tags</a>
+          </p>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  {{template "footer" .}}
+
+  <a class="fab" href="/?add=1" data-dialog-open="#add-dialog" aria-label="Add a misspelling" aria-haspopup="dialog" aria-controls="add-dialog" aria-expanded="false">+</a>
+
+  {{template "add-dialog" .}}
+  {{template "info-dialog" .}}
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <script src="/static/vendor/htmx.min.js" defer></script>
+</body>
+</html>{{end}}

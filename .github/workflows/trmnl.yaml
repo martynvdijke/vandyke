@@ -32,7 +32,7 @@ jobs:
         run: |
           python3 scripts/package-trmnl.py 0.0.0-ci
           count=$(find dist/trmnl -name '*.zip' -size +0c | wc -l)
-          test "$count" -eq 5
+          test "$count" -eq 6
           find dist/trmnl -name '*.zip' -printf '%f\n' | sort
 
       - name: Set up Ruby

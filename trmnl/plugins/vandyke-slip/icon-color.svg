@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="vanDyke">
+  <rect x="1" y="1" width="62" height="62" rx="13" fill="#C03427" stroke="#C03427" stroke-width="2"/>
+  <path d="M16 11h32v40H16z" fill="#FBF7EC"/>
+  <path d="M22 20h20M22 26h20M22 32h13" stroke="#C03427" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M35 35l8-8 4 4-8 8-5 1z" fill="#F1D79C" stroke="#C03427" stroke-width="1.2"/>
+  <path d="M10 56h44" stroke="#FFFFFF" stroke-width="1" opacity=".3"/>
+  <text x="32" y="61" text-anchor="middle" font-family="ui-monospace,monospace" font-size="4.1" font-weight="700" letter-spacing=".45" fill="#FFFFFF">VANDYKE</text>
+</svg>

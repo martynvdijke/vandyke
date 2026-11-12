@@ -17,10 +17,12 @@ import (
 	"vandyke.thor.edu/vandyke/internal/httpapi"
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/media"
+	"vandyke.thor.edu/vandyke/internal/metrics"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/settings"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/web"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 // Version is the application version. It is rewritten by semantic-release on
@@ -60,12 +62,38 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	api := httpapi.New(st, limiter, cfg.TrustProxy, cfg.PublicBaseURL, settingsStore.CurrentWebhook, logger)
-	ui, err := web.New(st, limiter, settingsStore.Current, settingsStore.CurrentWebhook, cfg.TrustProxy, cfg.PublicBaseURL, logger)
+	registry := metrics.New(metrics.Options{
+		Version: Version,
+		DBPath:  cfg.DBPath,
+		Logger:  logger,
+		Snapshot: func(ctx context.Context) (metrics.DBSnapshot, error) {
+			m, err := st.MetricsSnapshot(ctx)
+			if err != nil {
+				return metrics.DBSnapshot{}, err
+			}
+			return metrics.DBSnapshot{
+				Total:             m.Total,
+				Live:              m.Live,
+				Trashed:           m.Trashed,
+				WithPhoto:         m.WithPhoto,
+				PendingDeliveries: m.PendingDeliveries,
+			}, nil
+		},
+	})
+
+	// One delivery engine is shared by the public UI, the JSON API and the
+	// admin pages. It starts before the listener and stops before the store.
+	engine := webhook.NewEngine(st, settingsStore.CurrentWebhook, cfg.PublicBaseURL, registry, logger)
+	engine.Start()
+	defer engine.Close()
+	registry.SetQueueDepth(engine.QueueDepth)
+
+	api := httpapi.New(st, limiter, cfg.TrustProxy, cfg.PublicBaseURL, engine, registry, cfg.MetricsToken, logger)
+	ui, err := web.New(st, limiter, settingsStore.Current, engine, cfg.TrustProxy, cfg.PublicBaseURL, registry, logger)
 	if err != nil {
 		return err
 	}
-	adminUI, err := admin.New(ctx, st, settingsStore, cfg, logger)
+	adminUI, err := admin.New(ctx, st, settingsStore, cfg, engine, logger)
 	if err != nil {
 		return fmt.Errorf("admin: %w", err)
 	}
@@ -79,7 +107,9 @@ func run() error {
 		return cspFor(settingsStore.Current())
 	})(
 		httpx.RequestLogger(logger, cfg.TrustProxy)(
-			httpx.Recover(logger)(mux),
+			metrics.Middleware(registry)(
+				httpx.Recover(logger)(mux),
+			),
 		),
 	)
 
@@ -99,6 +129,7 @@ func run() error {
 			"db", cfg.DBPath,
 			"umami", settingsStore.Current().Enabled(),
 			"webhook", settingsStore.CurrentWebhook().Enabled(),
+			"metrics_token", cfg.MetricsToken != "",
 			"admin_setup_token", cfg.AdminSetupToken != "",
 			"oidc", cfg.OIDC.Enabled(),
 			"public_base_url", cfg.PublicBaseURL,

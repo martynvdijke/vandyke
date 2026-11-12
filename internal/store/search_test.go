@@ -24,7 +24,7 @@ func TestSearchIndexFollowsPerson(t *testing.T) {
 		t.Fatalf("person-only search = %+v, want entry %d", page, entry.ID)
 	}
 
-	if _, err := st.UpdateEntry(ctx, EntryUpdate{
+	if _, _, err := st.UpdateEntry(ctx, EntryUpdate{
 		ID: entry.ID, Word: "naam", Meaning: "a slip with a name", Person: "M. van Dijk",
 	}); err != nil {
 		t.Fatalf("UpdateEntry: %v", err)

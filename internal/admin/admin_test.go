@@ -27,11 +27,18 @@ import (
 	"vandyke.thor.edu/vandyke/internal/settings"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/web"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 var csrfPattern = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
 
 func newAdminTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *http.Client, *store.Store) {
+	t.Helper()
+	srv, client, st, _ := newAdminTestServerWithEngine(t, cfg)
+	return srv, client, st
+}
+
+func newAdminTestServerWithEngine(t *testing.T, cfg config.Config) (*httptest.Server, *http.Client, *store.Store, *webhook.Engine) {
 	t.Helper()
 	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "admin.db"))
 	if err != nil {
@@ -43,11 +50,14 @@ func newAdminTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *htt
 		t.Fatalf("settings.New: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	a, err := New(t.Context(), st, stg, cfg, logger)
+	engine := webhook.NewEngine(st, stg.CurrentWebhook, "", nil, logger)
+	engine.Start()
+	t.Cleanup(engine.Close)
+	a, err := New(t.Context(), st, stg, cfg, engine, logger)
 	if err != nil {
 		t.Fatalf("admin.New: %v", err)
 	}
-	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, stg.CurrentWebhook, false, "", logger)
+	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, engine, false, "", nil, logger)
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -67,7 +77,7 @@ func newAdminTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *htt
 			return http.ErrUseLastResponse
 		},
 	}
-	return srv, client, st
+	return srv, client, st, engine
 }
 
 func get(t *testing.T, client *http.Client, u string) (*http.Response, string) {
@@ -690,7 +700,7 @@ func TestAdminWebhookSettingsAndTestFire(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("no-url test-fire status = %d", status)
 	}
-	if !strings.Contains(body, "No webhook configured") {
+	if !strings.Contains(body, "No legacy webhook configured") {
 		t.Fatalf("no-url test-fire body missing the message: %.400s", body)
 	}
 

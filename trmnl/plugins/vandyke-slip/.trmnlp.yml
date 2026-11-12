@@ -1,0 +1,12 @@
+---
+watch:
+  - .trmnlp.yml
+  - src
+
+transform_runtime: enabled
+
+custom_fields:
+  url: ""
+
+variables:
+  trmnl: {}

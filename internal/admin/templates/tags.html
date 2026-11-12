@@ -1,0 +1,92 @@
+{{define "admin-tags"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Configuration</p>
+    <h1>Tags</h1>
+    <p class="admin-lede">The vocabulary the committee uses to distinguish kinds of slip. Tags can be renamed or recoloured freely; the slug is fixed at creation so public links keep working.</p>
+  </div>
+</div>
+
+{{if .Flash}}<p class="admin-flash" role="status">{{.Flash}}</p>{{end}}
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="admin-card">
+  <h2>Add a tag</h2>
+  <form method="post" action="/admin/tags" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-grid">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" name="name" value="{{.FormName}}" maxlength="40" required autocomplete="off">
+        <span class="field-hint">1 to 40 characters. The slug is derived once from this name.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Colour</span>
+        <input type="color" name="color" value="{{if .FormColor}}{{.FormColor}}{{else}}#8c3b3b{{end}}">
+        <span class="field-hint">A hex colour such as <code>#8c3b3b</code>.</span>
+      </label>
+    </div>
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Create tag</button>
+    </div>
+  </form>
+</section>
+
+<section class="admin-card">
+  <h2>The vocabulary</h2>
+  <p class="admin-lede">Live counts exclude trashed entries. Total counts every assignment, including entries currently in the trash; the delete confirmation uses that total because those are the entries that lose the tag.</p>
+  {{if .Tags}}
+  <table class="webhook-table tag-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Slug</th>
+        <th scope="col">Colour</th>
+        <th scope="col">Live</th>
+        <th scope="col">Total</th>
+        <th scope="col">Rename and recolour</th>
+        <th scope="col">Delete</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $t := .Tags}}
+      <tr>
+        <td>
+          <span class="tag-dot" style="background-color:{{$t.Color}}" aria-hidden="true"></span>
+          <span class="tag-name">{{$t.Name}}</span>
+          {{if $t.Error}}<br><span class="form-error">{{$t.Error}}</span>{{end}}
+        </td>
+        <td><code>{{$t.Slug}}</code></td>
+        <td><code>{{$t.Color}}</code></td>
+        <td>{{$t.LiveCount}}</td>
+        <td>{{$t.TotalCount}}</td>
+        <td>
+          <form method="post" action="/admin/tags/{{$t.ID}}" class="tag-inline-form">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="text" name="name" value="{{$t.FormName}}" maxlength="40" required autocomplete="off" aria-label="Name for the {{$t.Name}} tag">
+            <input type="color" name="color" value="{{$t.FormColor}}" aria-label="Colour for the {{$t.Name}} tag">
+            <button class="btn btn-ghost btn-small" type="submit">Save</button>
+          </form>
+        </td>
+        <td>
+          {{if $.IsOwner}}
+          <form method="post" action="/admin/tags/{{$t.ID}}/delete" class="tag-delete-form"
+                data-confirm-tag-delete data-tag-name="{{$t.Name}}" data-tag-count="{{$t.TotalCount}}">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button class="btn btn-danger btn-small" type="submit">Delete</button>
+          </form>
+          {{else}}
+          <span class="admin-muted">Owner only</span>
+          {{end}}
+          <p class="tag-delete-hint">Deleting this tag cannot be undone. {{$t.TotalCount}} {{if eq $t.TotalCount 1}}entry loses{{else}}entries lose{{end}} the tag.</p>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="admin-muted">The vocabulary is empty. Create the first tag above.</p>
+  {{end}}
+</section>
+{{template "admin-foot" .}}{{end}}

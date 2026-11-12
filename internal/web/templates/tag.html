@@ -1,0 +1,15 @@
+{{define "tag-page"}}{{template "page-head" .}}
+  <main class="page ledger-page tag-page" id="content" tabindex="-1">
+    <section class="workspace" aria-label="Ledger">
+      <header class="tag-hero">
+        <p class="eyebrow">Tagged</p>
+        <h1 class="tag-title"><span class="tag-dot" style="background-color:{{.Tag.Color}}" aria-hidden="true"></span>{{.Tag.Name}}</h1>
+        <p class="tag-lede">{{if .Ledger.Total}}{{.Ledger.Total}} {{if eq .Ledger.Total 1}}entry{{else}}entries{{end}} carry this tag.{{else}}No live entry carries this tag right now.{{end}} <a href="/tags">All tags</a></p>
+      </header>
+
+      {{template "ledger-toolbar" .}}
+
+      {{template "ledger" .}}
+    </section>
+  </main>
+{{template "page-foot" .}}{{end}}

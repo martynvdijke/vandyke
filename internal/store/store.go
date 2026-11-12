@@ -93,6 +93,12 @@ type Entry struct {
 	PhotoURL  string     `json:"photo_url,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+
+	// PhotoSHA256 is the original photo digest when a caller loaded it for a
+	// lifecycle snapshot (UpdateEntry). It is not part of the public JSON
+	// contract; the hash never leaves the server except in a webhook diff,
+	// truncated to 12 characters.
+	PhotoSHA256 string `json:"-"`
 }
 
 // Photo is image evidence attached to an entry. The original bytes are kept
@@ -183,6 +189,10 @@ type ListParams struct {
 	// side of the range open.
 	From time.Time
 	To   time.Time
+	// Tags names tag slugs. Every requested tag must be carried by an entry,
+	// so repeated values intersect, and tags intersect with every other
+	// filter because each becomes its own AND clause.
+	Tags []string
 }
 
 // Page is a paginated slice of entries.
@@ -238,6 +248,7 @@ func ValidateEntry(word, meaning string, hasPhoto bool) error {
 func NormalizeListParams(p ListParams) ListParams {
 	p.Query = strings.TrimSpace(p.Query)
 	p.Person = strings.TrimSpace(p.Person)
+	p.Tags = normalizeTagSlugs(p.Tags)
 	if _, ok := sortColumns[p.Sort]; !ok {
 		p.Sort = "created_at"
 	}
@@ -527,6 +538,12 @@ func ledgerFilter(p ListParams) (string, []any) {
 	if person := strings.TrimSpace(p.Person); person != "" {
 		clauses = append(clauses, `e.person = ? COLLATE NOCASE`)
 		args = append(args, person)
+	}
+	for _, slug := range p.Tags {
+		clauses = append(clauses, `EXISTS (
+			SELECT 1 FROM entry_tags et JOIN tags t ON t.id = et.tag_id
+			WHERE et.entry_id = e.id AND t.slug = ? COLLATE NOCASE)`)
+		args = append(args, slug)
 	}
 	if len(clauses) == 0 {
 		return "", args
@@ -1813,40 +1830,63 @@ func normalizeAuditDate(value string, endOfDay bool) string {
 }
 
 // UpdateEntry applies an administrator edit, optionally replacing or removing
-// the photo, and returns the updated entry.
-func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, error) {
+// the photo, and returns the previous snapshot together with the updated entry.
+// The previous snapshot is captured inside the same transaction as the write so
+// a webhook diff can never be built from a stale read.
+func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, Entry, error) {
 	update.Word = strings.TrimSpace(update.Word)
 	update.Meaning = strings.TrimSpace(update.Meaning)
 	update.Person = strings.TrimSpace(update.Person)
 	if update.Photo != nil && update.RemovePhoto {
-		return Entry{}, errors.New("choose either a new photo or remove the existing one")
+		return Entry{}, Entry{}, errors.New("choose either a new photo or remove the existing one")
 	}
 	if err := ValidatePerson(update.Person); err != nil {
-		return Entry{}, err
+		return Entry{}, Entry{}, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Entry{}, fmt.Errorf("begin entry update: %w", err)
+		return Entry{}, Entry{}, fmt.Errorf("begin entry update: %w", err)
 	}
 	var (
-		createdAt string
-		hasPhoto  bool
+		previous    Entry
+		createdAt   string
+		deletedAt   sql.NullString
+		previousSHA string
 	)
-	if err := tx.QueryRowContext(ctx, `SELECT created_at,
-		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = e.id)
-		FROM entries e WHERE e.id = ?`, update.ID).Scan(&createdAt, &hasPhoto); err != nil {
+	previous.ID = update.ID
+	if err := tx.QueryRowContext(ctx, `SELECT e.word, e.meaning, e.person, e.created_at, e.deleted_at,
+		COALESCE((SELECT p.sha256 FROM entry_photos p WHERE p.entry_id = e.id), '')
+		FROM entries e WHERE e.id = ?`, update.ID).Scan(
+		&previous.Word, &previous.Meaning, &previous.Person, &createdAt, &deletedAt, &previousSHA,
+	); err != nil {
 		_ = tx.Rollback()
 		if errors.Is(err, sql.ErrNoRows) {
-			return Entry{}, ErrNotFound
+			return Entry{}, Entry{}, ErrNotFound
 		}
-		return Entry{}, fmt.Errorf("load entry: %w", err)
+		return Entry{}, Entry{}, fmt.Errorf("load entry: %w", err)
 	}
-	if update.CreatedAt.IsZero() {
-		if update.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
+	previous.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		_ = tx.Rollback()
+		return Entry{}, Entry{}, fmt.Errorf("parse created_at %q: %w", createdAt, err)
+	}
+	if deletedAt.Valid && deletedAt.String != "" {
+		t, err := time.Parse(time.RFC3339, deletedAt.String)
+		if err != nil {
 			_ = tx.Rollback()
-			return Entry{}, fmt.Errorf("parse created_at %q: %w", createdAt, err)
+			return Entry{}, Entry{}, fmt.Errorf("parse deleted_at %q: %w", deletedAt.String, err)
 		}
+		previous.DeletedAt = &t
+	}
+	previous.PhotoSHA256 = previousSHA
+	if previousSHA != "" {
+		previous.PhotoURL = photoURL(update.ID)
+	}
+
+	hasPhoto := previousSHA != ""
+	if update.CreatedAt.IsZero() {
+		update.CreatedAt = previous.CreatedAt
 	}
 	if update.Photo != nil {
 		hasPhoto = true
@@ -1856,7 +1896,7 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 	}
 	if err := ValidateEntry(update.Word, update.Meaning, hasPhoto); err != nil {
 		_ = tx.Rollback()
-		return Entry{}, err
+		return Entry{}, Entry{}, err
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -1865,33 +1905,41 @@ func (s *Store) UpdateEntry(ctx context.Context, update EntryUpdate) (Entry, err
 	); err != nil {
 		_ = tx.Rollback()
 		if isUniqueViolation(err) {
-			return Entry{}, ErrDuplicate
+			return Entry{}, Entry{}, ErrDuplicate
 		}
-		return Entry{}, fmt.Errorf("update entry: %w", err)
+		return Entry{}, Entry{}, fmt.Errorf("update entry: %w", err)
 	}
+	newSHA := previousSHA
 	switch {
 	case update.Photo != nil:
 		if err := upsertEntryPhotoTx(ctx, tx, update.ID, update.Photo); err != nil {
 			_ = tx.Rollback()
-			return Entry{}, err
+			return Entry{}, Entry{}, err
 		}
+		newSHA = update.Photo.SHA256
 	case update.RemovePhoto:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM entry_photos WHERE entry_id = ?`, update.ID); err != nil {
 			_ = tx.Rollback()
-			return Entry{}, fmt.Errorf("remove entry photo: %w", err)
+			return Entry{}, Entry{}, fmt.Errorf("remove entry photo: %w", err)
 		}
+		newSHA = ""
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO entries_fts(rowid, word, meaning, person) VALUES (?, ?, ?, ?)`,
 		update.ID, update.Word, update.Meaning, update.Person,
 	); err != nil {
 		_ = tx.Rollback()
-		return Entry{}, fmt.Errorf("update search index: %w", err)
+		return Entry{}, Entry{}, fmt.Errorf("update search index: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return Entry{}, fmt.Errorf("commit entry update: %w", err)
+		return Entry{}, Entry{}, fmt.Errorf("commit entry update: %w", err)
 	}
-	return s.GetEntryIncludingDeleted(ctx, update.ID)
+	updated, err := s.GetEntryIncludingDeleted(ctx, update.ID)
+	if err != nil {
+		return Entry{}, Entry{}, err
+	}
+	updated.PhotoSHA256 = newSHA
+	return previous, updated, nil
 }
 
 // cleanIDs drops non-positive and duplicate ids while preserving order.
@@ -1913,69 +1961,108 @@ func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
-// SoftDeleteEntries marks entries as trashed by setting deleted_at, returning
-// the number of rows that moved to the trash. The index rows are removed so a
-// trashed entry cannot be found even by a future path that forgets the
-// deleted_at guard; RestoreEntries reindexes them. Photos are kept.
-func (s *Store) SoftDeleteEntries(ctx context.Context, ids []int64) (int64, error) {
+// selectLifecycleEntriesTx loads the rows a bulk lifecycle action will change,
+// inside the same transaction as the change, so the returned slice is exactly
+// the set of entries that were affected.
+func selectLifecycleEntriesTx(ctx context.Context, tx *sql.Tx, ids []any, trashed bool) ([]Entry, error) {
+	clause := `id IN (` + placeholders(len(ids)) + `)`
+	if trashed {
+		clause += ` AND deleted_at IS NOT NULL`
+	} else {
+		clause += ` AND deleted_at IS NULL`
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, word, meaning, person, created_at, deleted_at,
+		EXISTS (SELECT 1 FROM entry_photos p WHERE p.entry_id = entries.id)
+		FROM entries WHERE `+clause+` ORDER BY id`, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("query lifecycle entries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []Entry
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate lifecycle entries: %w", err)
+	}
+	return entries, nil
+}
+
+// SoftDeleteEntries marks entries as trashed by setting deleted_at and returns
+// the rows that actually moved to the trash, one per changed entry. Ids that
+// were already trashed are not returned, so a bulk action's slice length is its
+// exact changed count. The index rows are removed so a trashed entry cannot be
+// found even by a future path that forgets the deleted_at guard;
+// RestoreEntries reindexes them. Photos are kept.
+func (s *Store) SoftDeleteEntries(ctx context.Context, ids []int64) ([]Entry, error) {
 	clean := cleanIDs(ids)
 	if len(clean) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin entry trash: %w", err)
+		return nil, fmt.Errorf("begin entry trash: %w", err)
+	}
+	changed, err := selectLifecycleEntriesTx(ctx, tx, clean, false)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM entries_fts WHERE rowid IN (`+placeholders(len(clean))+`)`, clean...,
 	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("remove trashed search rows: %w", err)
+		return nil, fmt.Errorf("remove trashed search rows: %w", err)
 	}
-	res, err := tx.ExecContext(ctx,
+	deletedAt := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE entries SET deleted_at = ? WHERE id IN (`+placeholders(len(clean))+`) AND deleted_at IS NULL`,
-		append([]any{time.Now().UTC().Format(time.RFC3339)}, clean...)...,
-	)
-	if err != nil {
+		append([]any{deletedAt.Format(time.RFC3339)}, clean...)...,
+	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("soft delete entries: %w", err)
+		return nil, fmt.Errorf("soft delete entries: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, fmt.Errorf("soft deleted rows: %w", err)
+	// The rows were selected before the update; stamp the deletion time so a
+	// receiver sees the post-change snapshot and entry.deleted can carry
+	// deleted_at.
+	for i := range changed {
+		changed[i].DeletedAt = &deletedAt
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit entry trash: %w", err)
+		return nil, fmt.Errorf("commit entry trash: %w", err)
 	}
-	return n, nil
+	return changed, nil
 }
 
-// RestoreEntries clears deleted_at for the matching trashed entries and
-// returns the number of rows actually restored. Ids that are already live are
-// ignored, making restore idempotent. Restored rows are reindexed with all
-// three searchable columns.
-func (s *Store) RestoreEntries(ctx context.Context, ids []int64) (int64, error) {
+// RestoreEntries clears deleted_at for the matching trashed entries and returns
+// the rows that were actually restored. Ids that are already live are ignored,
+// making restore idempotent. Restored rows are reindexed with all three
+// searchable columns.
+func (s *Store) RestoreEntries(ctx context.Context, ids []int64) ([]Entry, error) {
 	clean := cleanIDs(ids)
 	if len(clean) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin entry restore: %w", err)
+		return nil, fmt.Errorf("begin entry restore: %w", err)
 	}
-	res, err := tx.ExecContext(ctx,
+	changed, err := selectLifecycleEntriesTx(ctx, tx, clean, true)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE entries SET deleted_at = NULL WHERE id IN (`+placeholders(len(clean))+`) AND deleted_at IS NOT NULL`,
 		clean...,
-	)
-	if err != nil {
+	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("restore entries: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, fmt.Errorf("restored rows: %w", err)
+		return nil, fmt.Errorf("restore entries: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO entries_fts(rowid, word, meaning, person)
@@ -1984,25 +2071,37 @@ func (s *Store) RestoreEntries(ctx context.Context, ids []int64) (int64, error) 
 		clean...,
 	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("reindex restored entries: %w", err)
+		return nil, fmt.Errorf("reindex restored entries: %w", err)
+	}
+	// A restored row is live again, so its snapshot must not carry deleted_at.
+	for i := range changed {
+		changed[i].DeletedAt = nil
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit entry restore: %w", err)
+		return nil, fmt.Errorf("commit entry restore: %w", err)
 	}
-	return n, nil
+	return changed, nil
 }
 
 // PurgeEntries permanently deletes trashed entries: the FTS rows first, then
-// the entry rows, whose photos cascade away. Live ids are ignored.
-func (s *Store) PurgeEntries(ctx context.Context, ids []int64) (int64, error) {
+// the entry rows, whose photos cascade away. It returns the deleted snapshots
+// so the caller can emit one entry.purged event per entry and erase terminal
+// delivery history for the purged ids in the same transaction. Live ids are
+// ignored.
+func (s *Store) PurgeEntries(ctx context.Context, ids []int64) ([]Entry, error) {
 	clean := cleanIDs(ids)
 	if len(clean) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	args := placeholders(len(clean))
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin entry purge: %w", err)
+		return nil, fmt.Errorf("begin entry purge: %w", err)
+	}
+	removed, err := selectLifecycleEntriesTx(ctx, tx, clean, true)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM entries_fts WHERE rowid IN (
@@ -2010,23 +2109,28 @@ func (s *Store) PurgeEntries(ctx context.Context, ids []int64) (int64, error) {
 		clean...,
 	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("purge search index rows: %w", err)
+		return nil, fmt.Errorf("purge search index rows: %w", err)
 	}
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM entries WHERE id IN (`+args+`) AND deleted_at IS NOT NULL`, clean...)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM entries WHERE id IN (`+args+`) AND deleted_at IS NOT NULL`, clean...,
+	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("purge entries: %w", err)
+		return nil, fmt.Errorf("purge entries: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
+	// A delivered or cancelled copy of the entry's text must not outlive the
+	// purge. Pending and failed rows remain because they exist to announce the
+	// purge itself and are bounded by the retention rules.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM webhook_deliveries WHERE entry_id IN (`+args+`) AND status IN (?, ?)`,
+		append(append([]any{}, clean...), WebhookStatusDelivered, WebhookStatusCancelled)...,
+	); err != nil {
 		_ = tx.Rollback()
-		return 0, fmt.Errorf("purged rows: %w", err)
+		return nil, fmt.Errorf("purge webhook delivery history: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit entry purge: %w", err)
+		return nil, fmt.Errorf("commit entry purge: %w", err)
 	}
-	return n, nil
+	return removed, nil
 }
 
 // GetSettings returns all persisted runtime settings.
@@ -2049,6 +2153,60 @@ func (s *Store) GetSettings(ctx context.Context) (map[string]string, error) {
 		return nil, fmt.Errorf("iterate settings: %w", err)
 	}
 	return values, nil
+}
+
+// GetSetting returns one persisted setting and whether the key exists. It is
+// the single-key counterpart of GetSettings, used by runtime state such as the
+// daily slip pin that must not load the whole configuration.
+func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("query setting %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
+// SetSettingIfAbsent inserts value under key only when the key has no row yet,
+// then reads the row back so the caller always sees the winning value. Two
+// concurrent first writers therefore agree on exactly one value.
+func (s *Store) SetSettingIfAbsent(ctx context.Context, key, value string) (string, error) {
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO NOTHING`,
+		key, value,
+	); err != nil {
+		return "", fmt.Errorf("insert setting %q: %w", key, err)
+	}
+	winning, exists, err := s.GetSetting(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("insert setting %q: row disappeared", key)
+	}
+	return winning, nil
+}
+
+// PruneSettingsPrefix deletes every row whose key starts with prefix except
+// keep, and reports how many rows were removed. It backs the daily slip so the
+// table holds at most one daily pin.
+func (s *Store) PruneSettingsPrefix(ctx context.Context, prefix, keep string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM settings WHERE substr(key, 1, length(?)) = ? AND key <> ?`,
+		prefix, prefix, keep,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("prune settings %q: %w", prefix, err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count pruned settings %q: %w", prefix, err)
+	}
+	return removed, nil
 }
 
 // SetSettings upserts runtime settings in one transaction.

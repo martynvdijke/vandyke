@@ -1,0 +1,238 @@
+{{define "admin-webhooks"}}{{template "admin-head" .}}
+{{template "admin-nav" .}}
+<div class="admin-heading">
+  <div>
+    <p class="eyebrow">Configuration</p>
+    <h1>Webhooks</h1>
+    <p class="admin-lede">Entry lifecycle events are delivered to up to 20 endpoints. Each endpoint has its own secret, event subscription and formatting preset. Delivery is at-least-once; retries are durable and bounded.</p>
+  </div>
+</div>
+
+{{if .Flash}}<p class="admin-flash" role="status">{{.Flash}}</p>{{end}}
+{{if .Error}}<p class="form-error admin-form-error" role="alert">{{.Error}}</p>{{end}}
+{{if .TestResult}}<p class="admin-flash" role="status">{{.TestResult}}</p>{{end}}
+
+<section class="admin-card">
+  <h2>{{.FormTitle}}</h2>
+  <p class="admin-lede">A blank secret field keeps the stored secret. The list masks the URL path and query, so a provider token is never rendered.</p>
+  <form method="post" action="{{.FormAction}}" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-grid">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" name="name" value="{{.FormName}}" maxlength="100" required autocomplete="off">
+        <span class="field-hint">Unique, case-insensitive, at most 100 characters.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Preset</span>
+        <select name="preset">
+          {{range .Presets}}<option value="{{.}}"{{if eq $.FormPreset .}} selected{{end}}>{{.}}</option>{{end}}
+        </select>
+        <span class="field-hint">Generic sends the ledger envelope; Discord and Slack send their native shapes.</span>
+      </label>
+    </div>
+    <label class="field">
+      <span class="field-label">Target URL</span>
+      <input type="url" name="url" value="{{.FormURL}}" maxlength="2048" required autocomplete="off">
+      <span class="field-hint">Absolute http or https URL. Private and loopback targets require the owner-only opt-in below; link-local addresses are always refused.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Signing secret <span class="field-optional">write-only</span></span>
+      <input type="password" name="secret" value="" autocomplete="new-password">
+      <span class="field-hint">{{if .FormSecretSet}}A secret is configured. Leave blank to keep it. {{else}}No secret is configured. {{end}}When set, every request carries <code>X-VanDyke-Signature: sha256=&lt;hex&gt;</code> over the exact body sent.</span>
+    </label>
+    {{if .FormSecretSet}}
+    <label class="filter-toggle">
+      <input type="checkbox" name="clear_secret" value="1">
+      <span>Clear the stored secret</span>
+    </label>
+    {{end}}
+    <fieldset class="webhook-events">
+      <legend class="field-label">Events</legend>
+      {{range .EventNames}}
+      <label class="filter-toggle">
+        <input type="checkbox" name="events" value="{{.}}"{{if index $.FormEvents .}} checked{{end}}>
+        <span><code>{{.}}</code></span>
+      </label>
+      {{end}}
+    </fieldset>
+    {{if .IsOwner}}
+    <label class="filter-toggle">
+      <input type="checkbox" name="allow_private" value="1"{{if .FormAllowPrivate}} checked{{end}}>
+      <span>Allow private and loopback targets (never link-local)</span>
+    </label>
+    {{else}}
+    <p class="field-hint">Private-target opt-in is owner-only. This endpoint {{if .FormAllowPrivate}}currently allows{{else}}does not allow{{end}} private targets.</p>
+    {{end}}
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Save endpoint</button>
+      {{if .EditID}}<a class="btn btn-ghost" href="/admin/webhooks">Cancel edit</a>{{end}}
+    </div>
+  </form>
+</section>
+
+<section class="admin-card">
+  <h2>Endpoints</h2>
+  {{if .Endpoints}}
+  <table class="webhook-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Host and masked path</th>
+        <th scope="col">Events / preset</th>
+        <th scope="col">State</th>
+        <th scope="col">Deliveries</th>
+        <th scope="col">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $e := .Endpoints}}
+      <tr>
+        <td>{{$e.Name}}</td>
+        <td><code>{{$e.MaskedURL}}</code><br><span class="webhook-muted">{{$e.Host}}</span></td>
+        <td><span class="webhook-events">{{$e.EventsLabel}}</span><br><span class="webhook-muted">{{$e.Preset}}</span></td>
+        <td>
+          {{if $e.Enabled}}Enabled{{else}}Disabled{{end}}<br>
+          <span class="webhook-muted">{{if $e.SecretSet}}secret configured{{else}}unsigned{{end}}{{if $e.AllowPrivate}} · private allowed{{end}}</span>
+        </td>
+        <td>
+          <span class="webhook-muted">
+            {{index $e.Counts "pending"}} pending · {{index $e.Counts "delivered"}} delivered<br>
+            {{index $e.Counts "failed"}} failed · {{index $e.Counts "cancelled"}} cancelled
+          </span>
+        </td>
+        <td>
+          <div class="webhook-actions">
+            <a class="btn btn-ghost btn-small" href="/admin/webhooks?edit={{$e.ID}}">Edit</a>
+            <form method="post" action="/admin/webhooks/{{$e.ID}}/toggle">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="btn btn-ghost btn-small" type="submit">{{if $e.Enabled}}Disable{{else}}Enable{{end}}</button>
+            </form>
+            <form method="post" action="/admin/webhooks/{{$e.ID}}/test">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="btn btn-ghost btn-small" type="submit">Test</button>
+            </form>
+            {{if $.Admin.IsOwner}}
+            <form method="post" action="/admin/webhooks/{{$e.ID}}/delete">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="btn btn-danger btn-small" type="submit">Delete</button>
+            </form>
+            {{end}}
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="admin-muted">No endpoints are configured.</p>
+  {{end}}
+
+  {{if .Legacy.Configured}}
+  <div class="admin-env-note">
+    <h2>Legacy target</h2>
+    <dl>
+      <div><dt>Environment default</dt><dd><code>{{.Legacy.MaskedURL}}</code></dd></div>
+      <div><dt>State</dt><dd>{{if .Legacy.Active}}Active — no enabled persisted endpoint exists{{else}}Suppressed — an enabled persisted endpoint takes precedence{{end}}</dd></div>
+      <div><dt>Secret</dt><dd>{{if .Legacy.SecretSet}}configured{{else}}not set{{end}}</dd></div>
+    </dl>
+    <p class="field-hint">The environment target is read-only and subscribes only to <code>entry.created</code>. Adopting it copies the effective URL and secret into a real endpoint. Link-local addresses stay refused.</p>
+    <form method="post" action="/admin/webhooks/adopt">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button class="btn btn-ghost btn-small" type="submit">Adopt as an endpoint</button>
+    </form>
+  </div>
+  {{end}}
+</section>
+
+<section class="admin-card">
+  <h2>Delivery log</h2>
+  <p class="admin-lede">Delivered and cancelled rows are kept for 7 days, failed rows for 30 days. Pending rows are never pruned. Payload text is cleared once a delivery is delivered or cancelled.</p>
+  <form class="admin-toolbar" method="get" action="/admin/webhooks">
+    <label class="pagesize">
+      <span>Endpoint</span>
+      <select name="endpoint">
+        <option value="">All endpoints</option>
+        {{range .Endpoints}}<option value="{{.ID}}"{{if eq $.FilterEndpoint (printf "%d" .ID)}} selected{{end}}>{{.Name}}</option>{{end}}
+      </select>
+    </label>
+    <label class="pagesize">
+      <span>Status</span>
+      <select name="status">
+        <option value="">Any status</option>
+        {{range .Statuses}}<option value="{{.}}"{{if eq $.FilterStatus .}} selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </label>
+    <button class="btn btn-primary btn-small" type="submit">Filter</button>
+    <a class="btn btn-ghost btn-small" href="/admin/webhooks">Clear</a>
+  </form>
+
+  <p class="admin-count">{{if .DeliveryTotal}}Showing {{len .Deliveries}} of <strong>{{.DeliveryTotal}}</strong> deliveries{{else}}No deliveries match{{end}}</p>
+
+  {{if .Deliveries}}
+  <table class="webhook-table">
+    <thead>
+      <tr>
+        <th scope="col">Created</th>
+        <th scope="col">Endpoint</th>
+        <th scope="col">Event</th>
+        <th scope="col">Status</th>
+        <th scope="col">Attempts</th>
+        <th scope="col">Last status</th>
+        <th scope="col">Last error</th>
+        <th scope="col">Next attempt</th>
+        <th scope="col">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $d := .Deliveries}}
+      <tr>
+        <td><time datetime="{{$d.CreatedAt.Format "2006-01-02T15:04:05Z"}}">{{formatDateTime $d.CreatedAt}}</time></td>
+        <td>{{$d.EndpointLabel}}{{if $d.EntryID}}<br><span class="webhook-muted">entry #{{$d.EntryID}}</span>{{end}}</td>
+        <td><code>{{$d.Event}}</code></td>
+        <td>{{$d.Status}}</td>
+        <td>{{$d.Attempts}}</td>
+        <td>{{if $d.LastStatus}}{{$d.LastStatus}}{{else}}<span class="webhook-muted">—</span>{{end}}</td>
+        <td>{{if $d.LastError}}{{$d.LastError}}{{else}}<span class="webhook-muted">—</span>{{end}}</td>
+        <td>{{if $d.NextAttemptAt}}{{formatDateTimeP $d.NextAttemptAt}}{{else}}<span class="webhook-muted">—</span>{{end}}</td>
+        <td>
+          {{if $d.CanRetry}}
+          <form method="post" action="/admin/webhooks/deliveries/{{$d.ID}}/retry">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button class="btn btn-ghost btn-small" type="submit">Retry now</button>
+          </form>
+          {{else}}<span class="webhook-muted">—</span>{{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+
+  {{if gt .DeliveryPages 1}}
+  <nav class="pager" aria-label="Delivery pages">
+    {{if gt .DeliveryPage 1}}
+    <a class="page-btn page-edge" href="/admin/webhooks?endpoint={{.FilterEndpoint}}&status={{.FilterStatus}}&page={{dec .DeliveryPage}}" rel="prev">← Prev</a>
+    {{else}}<span class="page-btn page-edge is-disabled">← Prev</span>{{end}}
+    <span class="page-nums">Page {{.DeliveryPage}} of {{.DeliveryPages}}</span>
+    {{if lt .DeliveryPage .DeliveryPages}}
+    <a class="page-btn page-edge" href="/admin/webhooks?endpoint={{.FilterEndpoint}}&status={{.FilterStatus}}&page={{inc .DeliveryPage}}" rel="next">Next →</a>
+    {{else}}<span class="page-btn page-edge is-disabled">Next →</span>{{end}}
+  </nav>
+  {{end}}
+  {{else}}
+  <div class="empty">
+    <p class="empty-title">No deliveries</p>
+    <p class="empty-text">No delivery row matches this filter.</p>
+  </div>
+  {{end}}
+
+  {{if .Admin.IsOwner}}
+  <form method="post" action="/admin/webhooks/prune" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-form-actions">
+      <button class="btn btn-ghost btn-small" type="submit">Prune old delivery history</button>
+    </div>
+  </form>
+  {{end}}
+</section>
+{{template "admin-foot" .}}{{end}}

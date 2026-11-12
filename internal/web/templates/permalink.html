@@ -6,16 +6,22 @@
   <title>{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}Photo entry{{end}} · vanDyke</title>
   <meta name="description" content="{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}A photo entry{{end}}, logged {{formatDate .Entry.CreatedAt}} in the vanDyke misspelling ledger.">
   <link rel="canonical" href="{{.CanonicalURL}}">
+  <meta name="robots" content="index,follow">
   <meta property="og:site_name" content="vanDyke">
   <meta property="og:type" content="article">
   <meta property="og:title" content="{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}Photo entry{{end}}">
   <meta property="og:description" content="Entry {{entryNo .Entry.ID}} in the LANCo misspelling ledger, logged {{formatDate .Entry.CreatedAt}}.">
   <meta property="og:url" content="{{.CanonicalURL}}">
-  {{if .OGImage}}<meta property="og:image" content="{{.OGImage}}">
+  <meta property="og:image" content="{{.OGImage}}">
+  {{if .OGWidth}}<meta property="og:image:width" content="{{.OGWidth}}">
+  <meta property="og:image:height" content="{{.OGHeight}}">{{end}}
+  <meta property="og:image:alt" content="{{.OGImageAlt}}">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="{{.OGImage}}">{{else}}<meta name="twitter:card" content="summary">{{end}}
+  <meta name="twitter:image" content="{{.OGImage}}">
   <meta name="twitter:title" content="{{if .Entry.Word}}{{.Entry.Word}} → {{.Entry.Meaning}}{{else}}Photo entry{{end}}">
   <meta name="twitter:description" content="Entry {{entryNo .Entry.ID}} in the LANCo misspelling ledger.">
+  <link rel="search" type="application/opensearchdescription+xml" title="vanDyke ledger search" href="/opensearch.xml">
+  {{if .JSONLD}}<script type="application/ld+json">{{.JSONLD}}</script>{{end}}
   <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
@@ -33,6 +39,8 @@
       <a class="wordmark" href="/">vanDyke</a>
       <nav class="masthead-nav" aria-label="Main">
         <a class="nav-link" href="/">The ledger</a>
+        <a class="nav-link" href="/words">Words</a>
+        <a class="nav-link" href="/photos">Photos</a>
         <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" aria-pressed="false">
           <span class="theme-dot" aria-hidden="true"></span>
         </button>
@@ -42,10 +50,11 @@
 
   <main class="page permalink-page" id="content" tabindex="-1">
     <article class="permalink-card">
-      <p class="eyebrow">Entry {{entryNo .Entry.ID}}</p>
+      <p class="eyebrow">Entry {{entryNo .Entry.ID}}{{if .IsSlip}} <span class="slip-badge">Slip of the day</span>{{end}}</p>
       {{if .Entry.Word}}<h1 class="permalink-word">{{.Entry.Word}}</h1>{{else}}<h1 class="permalink-word permalink-word-photo">Photo entry</h1>{{end}}
       {{if .Entry.Meaning}}<p class="permalink-meaning"><span class="arrow" aria-hidden="true">→</span> {{.Entry.Meaning}}</p>{{end}}
       {{if .Entry.Person}}<p class="permalink-person"><span class="person-chip">{{.Entry.Person}}</span></p>{{end}}
+      {{if .Tags}}<p class="permalink-tags">{{range .Tags}}<a class="tag-chip" href="/entries?tag={{.Slug}}">{{.Name}}</a>{{end}}</p>{{end}}
       {{if .Entry.PhotoURL}}
       <figure class="permalink-photo">
         <a href="{{.Entry.PhotoURL}}?size=display" target="_blank" rel="noopener">
@@ -57,7 +66,7 @@
       <time class="permalink-date" datetime="{{.Entry.CreatedAt.Format "2006-01-02T15:04:05Z"}}">Logged {{formatDate .Entry.CreatedAt}}</time>
       <div class="permalink-actions">
         <a class="btn btn-ghost" href="/">← Back to the ledger</a>
-        <button class="btn btn-primary" type="button" data-copy-link="{{.CanonicalURL}}">Copy link</button>
+        <a class="btn btn-primary" href="{{.CanonicalURL}}" data-share-url="{{.CanonicalURL}}" data-share-title="{{.ShareTitle}}" data-share-text="{{.ShareText}}">Copy link</a>
       </div>
     </article>
   </main>
@@ -77,6 +86,7 @@
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">
+  <link rel="search" type="application/opensearchdescription+xml" title="vanDyke ledger search" href="/opensearch.xml">
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/css/app.css">
   {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}

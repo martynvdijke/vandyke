@@ -89,12 +89,12 @@ func TestTrashHidesEntriesFromReadPathsAndRestores(t *testing.T) {
 		t.Fatalf("stats before = total %d photos %d, want 3/1", before.Total, before.WithPhoto)
 	}
 
-	n, err := st.SoftDeleteEntries(ctx, []int64{second.ID, second.ID, 0})
+	removed, err := st.SoftDeleteEntries(ctx, []int64{second.ID, second.ID, 0})
 	if err != nil {
 		t.Fatalf("SoftDeleteEntries: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("soft deleted = %d, want 1", n)
+	if len(removed) != 1 || removed[0].ID != second.ID {
+		t.Fatalf("soft deleted = %+v, want exactly the requested entry", removed)
 	}
 
 	if _, err := st.GetEntry(ctx, second.ID); !errors.Is(err, ErrNotFound) {
@@ -192,8 +192,8 @@ func TestTrashHidesEntriesFromReadPathsAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreEntries: %v", err)
 	}
-	if restored != 1 {
-		t.Fatalf("restored = %d, want 1", restored)
+	if len(restored) != 1 || restored[0].ID != second.ID {
+		t.Fatalf("restored = %+v, want exactly the requested entry", restored)
 	}
 	live, err := st.GetEntry(ctx, second.ID)
 	if err != nil {
@@ -229,8 +229,8 @@ func TestTrashHidesEntriesFromReadPathsAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreEntries(live): %v", err)
 	}
-	if again != 0 {
-		t.Fatalf("restored live id = %d, want 0", again)
+	if len(again) != 0 {
+		t.Fatalf("restored live id = %+v, want none", again)
 	}
 	if _, err := st.GetEntryPhoto(ctx, second.ID); err != nil {
 		t.Fatalf("photo after restore = %v, want served", err)
@@ -259,19 +259,19 @@ func TestPurgeDeletesIndexAndReleasesIdentity(t *testing.T) {
 	if err := st.db.QueryRow(`INSERT INTO entries (word, meaning) VALUES ('live', 'kept') RETURNING id`).Scan(&liveID); err != nil {
 		t.Fatalf("insert live entry: %v", err)
 	}
-	if n, err := st.PurgeEntries(ctx, []int64{liveID}); err != nil || n != 0 {
-		t.Fatalf("PurgeEntries(live) = %d (%v), want 0", n, err)
+	if purged, err := st.PurgeEntries(ctx, []int64{liveID}); err != nil || len(purged) != 0 {
+		t.Fatalf("PurgeEntries(live) = %d rows (%v), want 0", len(purged), err)
 	}
 	if _, err := st.GetEntry(ctx, liveID); err != nil {
 		t.Fatalf("live entry disappeared: %v", err)
 	}
 
-	n, err := st.PurgeEntries(ctx, []int64{entry.ID, entry.ID})
+	purged, err := st.PurgeEntries(ctx, []int64{entry.ID, entry.ID})
 	if err != nil {
 		t.Fatalf("PurgeEntries: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("purged = %d, want 1", n)
+	if len(purged) != 1 || purged[0].ID != entry.ID {
+		t.Fatalf("purged = %+v, want exactly the requested entry", purged)
 	}
 	if _, err := st.GetEntryIncludingDeleted(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("purged entry still readable: %v", err)

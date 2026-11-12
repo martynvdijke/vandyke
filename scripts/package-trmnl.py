@@ -3,7 +3,7 @@
 
 Each plugin is packaged with its directory as the archive root, which is what
 ``trmnlp`` expects when the archive is extracted. A combined archive containing
-all four plugins and the TRMNL README is produced as well.
+every plugin and the TRMNL README is produced as well.
 
 Usage:
     python3 scripts/package-trmnl.py 1.3.0

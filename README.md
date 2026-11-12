@@ -32,14 +32,40 @@ services required.
   the person. Quote a phrase, prefix a term with `-` to exclude it, filter by
   photo, year or an inclusive `from`/`to` date range, and see matches marked in
   the ledger.
+- **Entry tags** — a curated vocabulary (`typo`, `misheard`, `autocorrect`,
+  `name`, `dialect` and any tags an admin adds) that composes with every other
+  filter. Tags appear as chips on ledger rows and permalinks, have a public
+  index at `/tags`, canonical pages at `/tags/{slug}`, a tagged Atom feed and
+  their own sitemap entries.
+- **Year in review** — `/y/{yyyy}` recaps any year with live entries: totals,
+  the first and last slip, the busiest month, a twelve-month chart, the five
+  most frequent names, the longest misspelling and the photo ratio. Computed on
+  read, server-rendered and cacheable.
+- **Browse by word, person or chance** — `/words` is an A–Z dictionary of every
+  distinct misspelling with counts, first and last dates and a permalink from
+  each spelling; `/p/{person}` scopes the ledger to one attributed name;
+  `/random` redirects to a live slip and `/api/v1/random` returns one as JSON.
+- **Slip of the day** — `/` features one entry chosen by a deterministic hash
+  of the local date over the live ids, pinned in SQLite so every visitor sees
+  the same slip all day. It has a JSON surface at `/api/v1/slip`, a badge on the
+  pinned permalink and its own TRMNL plugin, and disappears while you search.
+- **Photo gallery** — `/photos` shows every photographed slip as a thumbnail
+  grid, newest first, paged by cursor, with HTMX infinite scroll that degrades
+  to a complete no-JavaScript page and an accessible native `<dialog>`
+  lightbox that fetches the display image only when opened.
 - **Stable permalinks** — every entry has a page at `/e/{id}` with Open Graph
-  and Twitter metadata for clean link previews, plus a copy-link button.
+  and Twitter metadata for clean link previews, a `DefinedTerm` JSON-LD block,
+  and a share control that uses the Web Share API where available and copies
+  the canonical link otherwise. A committed 1200×630 fallback image gives
+  text-only entries a large preview card too.
 - **Atom feed** — `GET /feed.xml` publishes the newest entries as Atom 1.0 with
-  a `limit` parameter, a strong ETag and autodiscovery from every page, so a
-  reader or RSS client can subscribe without polling the API.
-- **Optional outbound webhook** — post one signed `entry.created` JSON event to
-  a target of your choice after each addition. Delivery is best effort and never
-  delays the response.
+  a `limit` and `tag` parameter, a strong ETag and autodiscovery from every page,
+  so a reader or RSS client can subscribe without polling the API. Every person
+  page also has its own feed at `/p/{person}/feed.xml`.
+- **Webhooks with durable retries** — up to 20 named endpoints, each with its
+  own secret, event subscription (`created`, `updated`, `deleted`, `restored`,
+  `purged`) and generic, Discord or Slack preset. Delivery is non-blocking,
+  persisted, retried with jittered backoff and visible in a delivery log.
 - **Admin ledger** — sign in to edit every field, replace or remove photos,
   correct logged dates, and delete entries individually or in bulk. Public
   additions stay open; only editing and deletion require an admin.
@@ -51,8 +77,9 @@ services required.
   settings page or environment variables. Page views and custom events
   (`search`, `entry-added`, `theme-toggle`) are sent only when enabled; the CSP
   is adjusted at runtime.
-- **Four TRMNL e-ink plugins** — ledger stats, latest slips, the newest photo
-  entry and a combined dashboard, packaged as versioned release downloads.
+- **Five TRMNL e-ink plugins** — the slip of the day, ledger stats, latest
+  slips, the newest photo entry and a combined dashboard, packaged as versioned
+  release downloads.
 
 ## Quickstart
 
@@ -107,8 +134,9 @@ Compose). See [`.env.example`](.env.example).
 | `UMAMI_URL` | *(empty)* | Full URL of the self-hosted tracker, e.g. `https://umami.example.com/script.js`. |
 | `UMAMI_WEBSITE_ID` | *(empty)* | Umami website UUID. Analytics is enabled only when both are set. |
 | `UMAMI_DOMAINS` | *(empty)* | Optional comma-separated hostnames passed to `data-domains`. |
-| `LEDGER_WEBHOOK_URL` | *(empty)* | Optional target for the `entry.created` webhook. Empty disables dispatch. |
-| `LEDGER_WEBHOOK_SECRET` | *(empty)* | Optional HMAC-SHA256 key for `X-VanDyke-Signature`. Empty sends unsigned payloads. |
+| `LEDGER_WEBHOOK_URL` | *(empty)* | Legacy single webhook target, used only while no persisted endpoint is enabled. Prefer `/admin/webhooks`. Empty disables the legacy path. |
+| `LEDGER_WEBHOOK_SECRET` | *(empty)* | Legacy HMAC-SHA256 key for `X-VanDyke-Signature`. Empty sends unsigned payloads. |
+| `METRICS_TOKEN` | *(empty)* | When set, `GET /metrics` requires `Authorization: Bearer <token>` and returns 401 otherwise. `/readyz` is never gated. |
 | `ADMIN_SETUP_TOKEN` | *(empty)* | Optional token required by `/admin/setup`. Without it the first visitor can claim a fresh instance. |
 | `ADMIN_LOGIN_RATE_PER_MINUTE` | `10` | Login attempts allowed per IP per minute. |
 | `ADMIN_LOGIN_RATE_BURST` | `5` | Short-term login burst allowance per IP. |
@@ -128,13 +156,17 @@ stable envelope:
 
 | Method & path | Description |
 | --- | --- |
-| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`), `from`/`to` (`YYYY-MM-DD`, inclusive), `person` (exact name, case-insensitive). A malformed `from` or `to` answers `400 invalid_date`. |
+| `GET /api/v1/entries` | Paginated list. Query: `q`, `sort` (`word`, `meaning`, `created_at`, `id`), `order` (`asc`/`desc`), `page` (1-based), `per_page` (1–100, default 30), `photo` (`1` for entries with a photo, `0` for entries without), `year` (`YYYY`), `from`/`to` (`YYYY-MM-DD`, inclusive), `person` (exact name, case-insensitive), `tag` (a tag slug; repeat for an intersection). Every filter combines by intersection. A malformed `from` or `to` answers `400 invalid_date`. |
 | `GET /api/v1/entries/{id}` | Single entry. `404` when missing or in the trash. |
 | `POST /api/v1/entries` | Add an entry. JSON body `{"word": "...", "meaning": "...", "person": "..."}` (64 KiB cap) or `multipart/form-data` with `word`, `meaning`, optional `person` and an optional `photo` file. `person` is the slip's author and may be omitted. `201` with `Location`; `409` when the entry already exists; `422` on validation errors; `413` when an upload is too large; `429` when rate limited. |
 | `GET /api/v1/entries/{id}/photo` | The entry's public photo. Defaults to the clean display image; add `?size=thumb` for the thumbnail. `404` when the entry has no photo or is in the trash. The original upload is available only to admins. |
 | `GET /api/v1/stats` | `total_entries`, `unique_words`, `first_entry_at`, `last_entry_at`, `entries_last_30_days`, `with_photo`, `by_year` (`[{"year": 2026, "count": 12}]`) and `top_persons` (`[{"person": "Marieke", "count": 4}]`, the eight busiest names). |
 | `GET /api/v1/persons` | Distinct attributed persons with counts: `{"items": [{"person": "M. van Dijke", "count": 12}], "total": 3}`, ordered case-insensitively. Unattributed entries are not listed. |
-| `GET /healthz` | Liveness probe (`{"status":"ok"}`). |
+| `GET /api/v1/random` | One randomly drawn live entry, the same object as `GET /api/v1/entries/{id}`, with `Cache-Control: no-store`. Optional `photo` and `person` filters. `404 not_found` when nothing matches. This is a sibling route; `GET /api/v1/entries/random` still answers `400 invalid_id`. |
+| `GET /api/v1/slip` | The deterministic slip of the day: `{"date": "2026-11-11", "entry": {...}}`, where `entry` is the same object as `GET /api/v1/entries/{id}`. A strong `ETag` of the form `"slip-<date>-<id>"` and `Cache-Control: public, max-age=60`; a matching `If-None-Match` answers `304`. `404 not_found` when the ledger has no live entry. |
+| `GET /healthz` | Liveness probe (`{"status":"ok"}`). Never touches the database. |
+| `GET /readyz` | Readiness probe: SQLite answers and every embedded migration is applied. `200` with `{"status":"ready","checks":{"database":"ok","migrations":"ok"}}`, or `503` with `unavailable` and the coarse failing check. |
+| `GET /metrics` | Prometheus text exposition 0.0.4. Public unless `METRICS_TOKEN` is set. |
 
 Examples:
 
@@ -142,7 +174,12 @@ Examples:
 curl -s 'localhost:8080/api/v1/entries?q=boeke&per_page=5'
 curl -s 'localhost:8080/api/v1/entries?photo=1&year=2026'
 curl -s 'localhost:8080/api/v1/entries?person=Marieke'
+curl -s 'localhost:8080/api/v1/entries?tag=typo&year=2024'
+curl -s 'localhost:8080/api/v1/entries?tag=typo&tag=name'
 curl -s localhost:8080/api/v1/persons
+curl -s localhost:8080/api/v1/random
+curl -s localhost:8080/api/v1/slip
+curl -s 'localhost:8080/api/v1/random?person=Marieke&photo=1'
 curl -s localhost:8080/api/v1/entries/1
 curl -s -o thumb.jpg 'localhost:8080/api/v1/entries/1/photo?size=thumb'
 curl -s localhost:8080/api/v1/stats
@@ -160,8 +197,10 @@ or WebP and at most 10 MB; images above 12,000 pixels per side or 40 megapixels
 are rejected. Uploads are stored in SQLite as the original plus a display image
 (max 1600 px) and thumbnail (max 320 px). The public variants are re-encoded as
 JPEG without EXIF metadata; the original is retained for admin download. Entries
-return `photo_url` when they have a photo. Duplicates are allowed, exactly as on
-the original site.
+return `photo_url` when they have a photo. Duplicate submissions are rejected:
+the unique index on `(word, meaning)` compares case-insensitively (migration
+`007_dedupe_entries.sql`), so adding an existing pair answers `409
+duplicate_entry` from the API and `409` with a form error from the web UI.
 
 ## Search
 
@@ -187,6 +226,127 @@ restore, import and seed. An admin can regenerate it from the live entries with
 **Rebuild search index** on `/admin/settings`; trashed entries are skipped until
 they are restored.
 
+## Tags
+
+Tags record what kind of slip an entry is. The vocabulary is curated by an
+admin; entries are never classified automatically and the public cannot tag.
+The migration seeds `typo`, `misheard`, `autocorrect`, `name` and `dialect`, and
+an admin can rename, recolour, add or delete tags at `/admin/tags`. A slug is
+derived once from the name at creation and never changes, so renaming a tag
+never breaks a link.
+
+- `GET /tags` lists every tag with its live entry count, including tags with
+  zero entries.
+- `GET /tags/{slug}` is the canonical page for one tag: the ordinary ledger,
+  filtered to that tag, with its own canonical URL. An unknown slug is `404`.
+- `GET /entries?tag=typo` and `GET /api/v1/entries?tag=typo` filter the list.
+  Repeat `tag` for an intersection (`?tag=typo&tag=name` returns only entries
+  carrying both), and combine it with `q`, `from`, `to`, `year`, `photo` and
+  `person`. An unknown tag returns `200` with an empty result.
+- Ledger rows and `/e/{id}` pages show one chip per tag, each linking to the
+  filtered ledger.
+- `GET /feed.xml?tag=typo` filters the Atom feed; the tag is part of the feed
+  id, self link and ETag, so tag feeds cache independently.
+
+Trashed entries never count, never appear on a tag page and never enter a tag
+feed or the sitemap. Tags survive a trash-and-restore cycle and disappear only
+when the entry is purged.
+
+## Year in review
+
+`GET /y/{yyyy}` recaps one calendar year: the number of live entries, the first
+and last slip with dates and permalinks, the busiest month, a bar for each of
+the twelve months, the five most frequent names, the longest misspelling, the
+number and percentage of entries with a photo, and a link to
+`/entries?year={yyyy}`.
+
+Every figure is computed on read from the same table the ledger uses; nothing
+is stored. Ties are deterministic (the earliest month, the person with the
+alphabetically earlier name, the earlier misspelling of the same length). A
+year with no live entries is `404`. The page sends
+`ETag: "year-{yyyy}-{hash}"` and `Cache-Control: public, max-age=300`, answers
+a matching `If-None-Match` with `304`, and is linked from the `/stats` by-year
+chart for every year that has entries. It renders without JavaScript, and the
+month chart and person ranking each have a visually hidden table alternative.
+
+## Browsing: words, people, a random slip and the gallery
+
+The ledger is searchable, but these pages make it navigable without a query.
+
+- `GET /words` is an A–Z index of every distinct misspelling recorded on a live
+  entry, grouped case-insensitively the way the unique `(word, meaning)` index
+  folds it. The fixed rail shows A–Z plus `#` (digits, punctuation, accented and
+  non-Latin spellings) with a count per bucket; an empty bucket is inert text,
+  never a link. One bucket renders per document, defaulting to `#` when it has
+  rows and otherwise the first non-empty letter. `?letter=F` selects a bucket
+  (an empty or unknown one is `404`), `?page=` pages a long letter at 200 rows,
+  and every row shows the spelling, its entry count, its first and last date and
+  links to the newest occurrence's permalink. A note appears only when a live
+  slip has a photograph but no text, and links to `/photos`.
+- `GET /p/{person}` scopes the ordinary ledger to one attributed name. The name
+  matches case-insensitively, so `/p/marieke` and `/p/Marieke` are one document,
+  and the page canonicalises to the spelling of the newest matching slip. It
+  shows the count and the first and last slip, and it keeps its scope in the
+  search box, sort headers, pager and clear-search link; a `person` query
+  parameter is ignored because the path wins. Names with spaces, accents or a
+  slash work through the percent-encoded path segment. An unknown or empty name
+  is `404`. The page is `noindex, follow` and is not in the sitemap: every row
+  already links to an indexed permalink.
+- `GET /p/{person}/feed.xml` is that person's Atom 1.0 feed: only their live
+  entries, newest first, with the person as the feed-level author and a feed id
+  of `{base}/p/{person}/feed.xml`. `limit` defaults to 50 and is capped at 100.
+  Responses carry a strong `ETag` and `Cache-Control: public, max-age=60`, and a
+  matching `If-None-Match` answers `304`. A person with no live slip is `404`.
+- `GET /random` draws one live entry and answers `303 See Other` to its
+  `/e/{id}` permalink, with `Cache-Control: no-store` and `X-Robots-Tag:
+  noindex`, so a reload does not reroll. Optional `photo=1` and `person=` filters
+  narrow the draw; an empty or unmatched ledger is the not-found page.
+  `GET /api/v1/random` returns the same entry object as the JSON permalink with
+  `Cache-Control: no-store`.
+- `GET /photos` is the gallery of every live entry that has a photo, newest
+  first, 24 tiles per batch. `?cursor=` is an opaque token for the last rendered
+  tile's `(created_at, id)`, so an entry added while a reader scrolls can never
+  repeat or skip a tile below the cursor; a malformed cursor is `400` rather
+  than a silent restart. The sentinel after the last tile is a real link with
+  `hx-trigger="revealed"`, so HTMX appends the next batch, while the same URL
+  without `HX-Request` is a complete page with `rel="prev"`/`rel="next"` links
+  and a link back to `/photos`. `/photos` sets `Vary: HX-Request`. Grid images
+  are always the `thumb` variant with `loading="lazy"`; a single native
+  `<dialog>` lightbox loads the display image only when a tile is opened and
+  returns focus to that tile on close. The bare gallery is indexable; cursor
+  variants are `noindex, follow` with `/photos` as canonical.
+
+## Slip of the day
+
+One entry is featured for the whole local calendar day. It is not random: the
+resolver hashes `vandyke-daily-slip\0<YYYY-MM-DD>` with FNV-1a 64, uses the
+remainder modulo the ascending live ids as an index, and pins the chosen id in
+the `settings` table under `daily_slip.<YYYY-MM-DD>`. Every process and visitor
+therefore computes and serves the same entry, and adding (or trashing a
+different) entry during the day does not change it.
+
+- `GET /` renders the slip between the hero and the statistics block, with the
+  misspelling, the correction, the date, an optional person chip, an optional
+  thumbnail and a link to its permalink. It is omitted while any listing
+  parameter is present (`q`, `person`, `year`, `from`, `to`, `photo`, `page`,
+  `per_page`, `sort`, `order`) and hidden by JavaScript as soon as a search term
+  or filter becomes active. The HTMX ledger fragment never contains it.
+- `GET /api/v1/slip` returns `{"date": "...", "entry": {...}}` with the entry
+  object used everywhere else, a strong ETag `"slip-<date>-<id>"`, a 60-second
+  public cache and a `304` for a repeated `If-None-Match`.
+- The pinned entry's `/e/{id}` page shows a **Slip of the day** badge; its
+  canonical URL is unchanged.
+- The pinned id is replaced only when the entry no longer resolves (it was
+  trashed or purged), because a removed pick must not leave the home page
+  pointing at a 404 for the rest of the day. Pins older than the current date
+  are pruned on every write, so the table holds at most one.
+- The day is the server's local date; set `TZ` in the deployment to control it.
+  A ledger with no live entry has no slip: the section disappears and the JSON
+  surface answers `404 not_found` with `the ledger has no entry for today`.
+
+`GET /api/v1/slip` is documented in the [API](#api) table, and the
+`trmnl/plugins/vandyke-slip` plugin polls it hourly.
+
 ## Atom feed
 
 `GET /feed.xml` serves the newest live entries as Atom 1.0. Each entry uses
@@ -197,9 +357,15 @@ trashed entries are never included.
 
 - `limit` defaults to 50 and is capped at 100. A non-numeric or sub-1 value uses
   the default; a larger one is capped. The cap matches `store.MaxPerPage`.
-- Responses carry a strong `ETag` derived from the newest entry id and the
-  number of rows, plus `Cache-Control: public, max-age=60`. A matching
-  `If-None-Match` answers `304` with no body.
+- `tag` (a slug) filters the feed. The tag is folded into the feed id and self
+  link (`/feed.xml?tag=typo`) and into the ETag, so one tag's feed never shares
+  a cache entry with another's. An unknown tag is a valid empty feed.
+- `GET /p/{person}/feed.xml` is the same document shape scoped to one person.
+  Its id, self link and ETag include the person, so two names never share a
+  cache entry, and a case variant resolves to the canonical spelling's feed.
+- Responses carry a strong `ETag` derived from the newest entry id, the number
+  of rows and any tag filter, plus `Cache-Control: public, max-age=60`. A
+  matching `If-None-Match` answers `304` with no body.
 - Every public page head carries
   `<link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">`.
 - Absolute URLs follow `PUBLIC_BASE_URL` and otherwise the request scheme and
@@ -208,10 +374,30 @@ trashed entries are never included.
 ## Permalinks
 
 Every entry has a stable public page at `/e/{id}`. The page shows the full
-entry, its date and photo, and includes Open Graph/Twitter metadata for link
-previews plus a copy-link button. Entry numbers in the ledger link to their
+entry, its date, its photo and its tag chips, and includes Open Graph/Twitter
+metadata for link previews. Entry numbers in the ledger link to their
 permalink. Set `PUBLIC_BASE_URL` behind a reverse proxy so canonical and social
 URLs use the public hostname; otherwise they are derived from the request.
+
+- **Share or copy.** The primary control is a real anchor pointing at the
+  canonical URL. Where `navigator.share` exists it opens the share sheet; a
+  cancelled sheet is a no-op, and any other failure falls back to the clipboard
+  (`navigator.clipboard.writeText`, then `document.execCommand`). Success shows
+  `Link copied` and announces `Link copied.` in the page's polite live region.
+  Without JavaScript the anchor is an ordinary link the browser can copy.
+- **Structured data.** Each permalink carries one JSON-LD `DefinedTerm`: the
+  misspelling as `name`, the correction as `description`, the permalink as
+  `url`, the entry id as `identifier`, the creation time as `dateCreated` and
+  `inDefinedTermSet` naming the ledger. A photo-only entry uses
+  `Photo entry #<id>` and adds the absolute photo as `image`.
+- **Preview image.** Every permalink declares `og:image` and `twitter:image`
+  with `twitter:card: summary_large_image`; entries without a photo use the
+  committed `1200×630` asset at `/static/images/og-default.png`, so a
+  text-only slip still gets a large card. Card images are never generated at
+  request time.
+- **Indexing.** `/e/{id}` is `index,follow` with a self-canonical; `/entries`
+  in every form — and `/` carrying any listing parameter — is `noindex,follow`
+  without a canonical. Every live permalink stays in `/sitemap.xml`.
 
 ## Discoverability and accessibility
 
@@ -219,13 +405,32 @@ The binary serves its own crawler and browser metadata, all through the same
 middleware as every other route:
 
 - `GET /robots.txt` — `text/plain`; disallows `/admin` and names the sitemap.
-- `GET /sitemap.xml` — `application/xml`; the home page, `/stats` and one
-  `/e/{id}` permalink per live entry, all absolute URLs.
+- `GET /sitemap.xml` — `application/xml`; the home page, `/stats`, `/words`,
+  `/photos`, `/tags`, every tag with at least one live entry, every year with at
+  least one live entry, and one `/e/{id}` permalink per live entry, all absolute
+  URLs. Empty tags, empty years, person pages, `/random` and query-string filter
+  URLs are omitted.
 - `GET /feed.xml` — `application/atom+xml; charset=utf-8`; the newest live
-  entries, newest first.
+  entries, newest first, plus one feed per person at
+  `/p/{person}/feed.xml`.
 - `GET /site.webmanifest` — `application/manifest+json`; name, short name,
   `start_url` `/`, `standalone` display, `#f4eee1` theme/background colours and
   the existing favicon and Apple touch icon.
+- `GET /opensearch.xml` — `application/opensearchdescription+xml; charset=utf-8`;
+  an OpenSearch 1.1 description document with the short name `vanDyke`, UTF-8
+  input encoding and the URL template `{base}/?q={searchTerms}`. Every HTML
+  head advertises it with `<link rel="search" ...>`, so a browser can add the
+  ledger as a search provider. The template uses the ordinary search grammar
+  (quoted phrases and `-` exclusions included); no suggestions endpoint is
+  advertised.
+
+Canonical and robots signals are decided per surface: `/`, `/stats` and
+`/e/{id}` are `index,follow` with a self-canonical built from
+`PUBLIC_BASE_URL` (or the request). `/entries` in every form, and `/` carrying
+any listing parameter, are `noindex,follow` and carry no canonical, because a
+canonical pointing elsewhere beside `noindex` sends conflicting signals.
+`/stats` also emits a schema.org `Dataset` with its temporal coverage, measured
+values and a `DataDownload` for `/api/v1/stats`.
 
 Sitemap and robots URLs follow `PUBLIC_BASE_URL` when it is set and otherwise
 the request scheme and host, exactly like permalink canonicals. Trashed entries
@@ -233,7 +438,10 @@ are absent from the sitemap.
 
 The public ledger works without JavaScript. `GET /entries` returns a complete
 document when requested directly (sort, pager and "Clear search" links are plain
-navigations), and the bare ledger fragment only when HTMX asks for it. Every
+navigations), and the bare ledger fragment only when HTMX asks for it. The same
+rule applies to `/photos`: a cursor URL is a complete page when navigated to
+directly and a bare batch only when `HX-Request` is present (with `Vary:
+HX-Request` keeping a shared cache from mixing the two). Every
 page carries a skip link to `main#content`, the theme toggle reports
 `aria-pressed`, dialog triggers report `aria-expanded`, the statistics charts
 have visually hidden tables as text alternatives, and the admin login, setup and
@@ -257,8 +465,9 @@ admin account at `/admin`.
 ### Roles and admin accounts
 
 Each admin is an **owner** or an **editor**. Owners can do everything an editor
-can, plus delete entries, purge the trash, manage admins and read the audit
-trail. Editors can edit entries, restore trashed entries and change settings.
+can, plus delete entries and tags, purge the trash, manage admins and read the
+audit trail. Editors can edit entries, restore trashed entries and change
+settings.
 
 - `/admin/admins` (owners only) lists every account and creates, promotes,
   demotes, disables, re-enables, deletes and resets the password of another
@@ -303,13 +512,44 @@ Both actions work per row or on a selection, accept at most 100 ids per
 request, and are CSRF-protected. There is no retention job: an entry stays in
 the trash until an admin explicitly purges it. A trashed entry still occupies
 its case-insensitive `(misspelling, correction)` slot, so re-adding the same
-pair fails as a duplicate until the old row is purged.
+pair fails as a duplicate until the old row is purged. Tags on a trashed entry
+are kept and return with it on restore; purging removes them with the entry.
+
+### Tags
+
+`/admin/tags` manages the vocabulary. Each row shows a **live** count (entries
+not in the trash) and a **total** count (every assignment, trash included), a
+rename and colour form, and a delete control. Create and save are available to
+every admin and CSRF-protected; delete is owner-only, CSRF-protected, and its
+confirmation states how many entries lose the tag because it removes the tag
+from all of them at once. Names are unique case-insensitively and capped at 40
+characters; the slug is derived once from the name and never changes. Every
+create, rename, colour change and deletion writes an audit row
+(`tag.create`, `tag.rename`, `tag.color`, `tag.delete`).
+
+Assigning tags is part of the ordinary entry edit form: the tag fieldset lists
+every tag as a checkbox, the submitted set replaces the entry's tags, and
+clearing every box removes them all. Each change writes an `entry.tags` audit
+row with the sorted resulting slugs.
 
 ### Webhooks
 
-Set `LEDGER_WEBHOOK_URL`, or store `webhook.url` on `/admin/settings`, to have
-the server post one JSON event after each successful entry creation from the web
-form or `POST /api/v1/entries`:
+Delivery targets live at `/admin/webhooks`. Each endpoint has a name, an
+absolute `http`/`https` URL, an optional signing secret, an enabled flag, a
+comma-separated subscription and a formatting preset. Up to 20 endpoints are
+allowed, and names are unique case-insensitively. Saving, editing, enabling,
+disabling, adopting or deleting an endpoint rebuilds the in-memory target
+snapshot immediately; no restart is needed.
+
+The five events are `entry.created`, `entry.updated`, `entry.deleted`,
+`entry.restored` and `entry.purged`. One event is emitted per entry actually
+changed, including every changed row in a bulk action of up to 100 ids, so a
+100-entry delete produces 100 events. An already-trashed id, a no-op edit and a
+bulk import produce none. An import is a reconciliation action; after an import,
+receivers should reconcile from `GET /api/v1/entries` or an export. There is no
+import event.
+
+The `generic` `entry.created` body is stable:
 
 ```json
 {
@@ -325,22 +565,74 @@ form or `POST /api/v1/entries`:
 
 - The request is `POST` with `Content-Type: application/json`. `person` is an
   empty string when the entry is unattributed, and `url` is the absolute
-  permalink.
-- With `LEDGER_WEBHOOK_SECRET` or the `webhook.secret` setting configured, the
-  exact body bytes are signed as `X-VanDyke-Signature: sha256=<lowercase hex>`
-  using HMAC-SHA256. The header is omitted when no secret is effective.
-- Dispatch is fire-and-forget: the create response is not delayed or changed,
-  and a failure is only logged at warn level.
-- **Delivery is best effort.** There are no retries, no delivery history and no
-  at-least-once guarantee. A receiver that must be certain should reconcile
-  against `GET /api/v1/entries` or the Atom feed, and should de-duplicate on
-  `id` because the same event may arrive more than once.
-- Runtime settings win over the environment. The secret is write-only: the admin
-  page reports configured/unconfigured, a blank secret field keeps the stored
-  value, and the clear control removes it.
-- **Send test event** on `/admin/settings` posts the same payload shape for the
-  newest entry (or zeroed fields on an empty ledger) and waits up to five
-  seconds to report the receiver's HTTP status or a sanitised error.
+  `/e/{id}` permalink using `PUBLIC_BASE_URL` when set.
+- The four newer events add `occurred_at` in RFC 3339. `entry.updated` also
+  carries `changes` (`word`, `meaning`, `person`, `created_at`, `photo`, each
+  `{"from": ..., "to": ...}`), and editing a trashed entry adds `deleted_at`.
+  `entry.deleted` and `entry.purged` always carry `deleted_at`; `entry.restored`
+  does not. A photo change is reported as the previous and new original
+  SHA-256 truncated to 12 hex characters, or `null` when that side has no photo.
+- With a secret configured, the exact bytes that were sent are signed as
+  `X-VanDyke-Signature: sha256=<lowercase hex>` using HMAC-SHA256. The header is
+  omitted when the endpoint has no secret.
+- **Presets.** `generic` sends the envelope above. `discord` sends a non-empty
+  `content`, one embed with `title`, `description`, `url` and `timestamp`, and
+  `allowed_mentions.parse: []` so a word containing `@everyone` cannot ping a
+  channel. `slack` sends a `text` fallback and one `section` block of type
+  `mrkdwn`, escaping `&`, `<` and `>` so `<!channel>` cannot inject a mention.
+  A photo-only entry falls back to `Entry #{id}` and the permalink for the
+  required non-empty fields.
+- **Delivery is non-blocking and at-least-once.** Emission only stamps the
+  event and appends to a 1,024-job queue; rendering, signing, DNS and the HTTP
+  request happen on one of four workers. When the queue is full the event is
+  dropped, logged, and counted in `vandyke_webhook_dropped_total`; the request
+  still succeeds.
+- **Retries are durable.** A worker persists one `webhook_deliveries` row when
+  it picks up a job. `2xx` is delivered; transport errors, timeouts, `408`,
+  `425`, `429` and `5xx` are retried with full-jitter exponential backoff
+  (5 second base, 1 hour cap) up to 8 attempts; any other response, a redirect,
+  or a render failure is terminal. Because delivery is at-least-once, receivers
+  should de-duplicate on `event` plus `id` (plus `occurred_at` where present).
+- **Delivery log and retention.** `/admin/webhooks` shows endpoint, event, entry
+  id, status, attempts, last status, a sanitised last error and the next attempt
+  time. "Retry now" puts a failed row back in the queue without resetting its
+  attempt count and writes an audit row. Delivered and cancelled rows are kept
+  for 7 days, failed rows for 30 days; pending rows are never pruned. An hourly
+  job prunes automatically, and an owner can run the same prune explicitly.
+  Payload text is cleared as soon as a delivery is delivered or cancelled, and
+  purging an entry deletes its terminal delivery history.
+- **Secrets and URLs are write-only in the UI.** The list masks the URL path and
+  query (Discord and Slack put a token there), the edit form shows the URL but
+  never the stored secret, a blank secret field keeps the stored value, and a
+  separate control clears it. Logs and audit rows record only the host and
+  whether a secret changed.
+- **SSRF defaults.** Only absolute `http`/`https` URLs without credentials are
+  accepted. Loopback, RFC 1918, IPv6 unique-local, carrier-grade NAT
+  (100.64.0.0/10, including Tailscale), link-local, unspecified, multicast and
+  IPv4-mapped equivalents are denied by default. An owner can set
+  `allow_private` to permit loopback, private and CGNAT targets for a LAN
+  receiver such as Home Assistant or ntfy; link-local, unspecified and
+  multicast stay denied. The address policy is checked when an endpoint is
+  saved and again by the dialer on every attempt. Redirects are not followed,
+  an attempt times out after 5 seconds, and at most 4 KiB of the response is
+  read and discarded.
+- **Per-endpoint test fire.** `POST /admin/webhooks/{id}/test` sends one
+  `entry.created` for the newest entry with that endpoint's preset and secret,
+  applies the same target policy, waits up to 5 seconds and reports the HTTP
+  status or a sanitised error without changing the endpoint.
+
+#### Legacy single target
+
+`LEDGER_WEBHOOK_URL`, or `webhook.url` on `/admin/settings`, keeps working as a
+read-only synthesized endpoint named "Environment default". It uses the generic
+preset, subscribes only to `entry.created`, records deliveries with a null
+endpoint id and is treated as `allow_private` so an existing LAN target keeps
+working (link-local is still refused). It is active only while no persisted
+endpoint is enabled; any enabled endpoint suppresses it, so a migration cannot
+double-deliver. **Adopt as an endpoint** on `/admin/webhooks` copies the
+effective URL and secret into a real endpoint. The settings page labels the
+section as legacy, and its "Send legacy test event" action reports when the
+target is suppressed.
 
 ### Export
 
@@ -369,6 +661,10 @@ any row rolls the whole file back.
 Caps: 64 MiB per request, 20,000 entries and 10 MiB per photo. Requests over a
 cap are refused with 413.
 
+Import does not emit webhook events: a 20,000-row file would flood a deliberately
+small queue or deliver an arbitrary prefix. Receivers that need to reconcile
+after an import should read `GET /api/v1/entries` or an export.
+
 ### OIDC
 
 Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and optionally `OIDC_CLIENT_SECRET` and
@@ -386,6 +682,51 @@ username and password, and while no admin exists that same page offers
 "Continue with OpenID Connect", where the first identity to finish signing in
 becomes the first admin. Once an admin exists, sign-in is available from the
 `Sign in` link in the site navigation or directly at `/admin/login`.
+
+## Observability
+
+`GET /metrics` serves Prometheus text exposition format 0.0.4, hand-written with
+the standard library (no module is added to `go.mod`). It is public by default,
+matching the already-public ledger and API, so Prometheus can scrape it from
+another container. Set `METRICS_TOKEN` to require
+`Authorization: Bearer <token>`, compared in constant time; a missing or wrong
+token is a `401` with no body. The endpoint sets
+`Content-Type: text/plain; version=0.0.4; charset=utf-8` and
+`Cache-Control: no-store`.
+
+Exported series:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `vandyke_entries_total` | gauge | All entries, including trashed rows. |
+| `vandyke_entries_live` / `vandyke_entries_trashed` | gauge | Current live and trashed counts. |
+| `vandyke_entries_with_photo` | gauge | Live entries with a photo. |
+| `vandyke_entry_additions_total{outcome}` | counter | `created`, `duplicate`, `invalid`, `rate_limited`, `error`. |
+| `vandyke_rate_limited_requests_total` | counter | Creates denied by either limiter. |
+| `vandyke_webhook_deliveries_total{result}` | counter | `delivered`, `failed`, `cancelled` outcomes (a manual retry can add a second outcome for one row). |
+| `vandyke_webhook_attempts_total{result}` | counter | `success`, `retry`, `permanent_failure`. |
+| `vandyke_webhook_queue_depth` / `vandyke_webhook_pending_deliveries` | gauge | In-process queue length and persisted pending rows. |
+| `vandyke_webhook_dropped_total` | counter | Events dropped on a full queue. |
+| `vandyke_http_requests_total{method,route,status}` | counter | Completed requests. |
+| `vandyke_http_request_duration_seconds{method,route}` | histogram | Buckets 5ms to 10s plus `+Inf`. |
+| `vandyke_db_size_bytes`, `vandyke_db_up` | gauge | Main SQLite file size (excluding `-wal`/`-shm`) and scrape-time query success. |
+| `vandyke_process_start_time_seconds`, `vandyke_process_uptime_seconds` | gauge | Process lifetime. |
+| `vandyke_build_info{version,go_version,goos,goarch}` | gauge | Constant 1. |
+
+`route` is always the registered mux pattern (for example `GET /e/{id}`) or
+`unmatched`, never the raw path, so no entry id becomes a series. Database
+gauges are read at scrape time under a 2 second timeout: if the query fails,
+`vandyke_db_up` is `0`, the DB series are omitted, the failure is logged, and the
+scrape still answers `200` with the process metrics. Counters reset on restart.
+
+`GET /readyz` is separate from `GET /healthz`. It runs `SELECT 1` and verifies
+that every embedded migration is recorded in `schema_migrations`, under a 2
+second timeout, and returns `200` with
+`{"status":"ready","checks":{"database":"ok","migrations":"ok"}}` or `503` with
+`unavailable` and the coarse failing check. It never contains the DSN, database
+path, an error string or a credential, and it is never gated by
+`METRICS_TOKEN`, because probes must work without credentials. `/healthz` keeps
+its historical always-`200` body.
 
 ## Umami analytics
 
@@ -446,9 +787,11 @@ internal/settings/     runtime Umami settings with env fallback
 internal/media/        photo derivatives, EXIF stripping and backfill
 internal/ratelimit/    per-IP token bucket
 internal/httpx/        shared HTTP helpers (client IP, JSON envelopes, logging)
-internal/httpapi/      REST API under /api/v1
+internal/metrics/      Prometheus registry, HTTP middleware and text exposition
+internal/webhook/      endpoint snapshots, presets, SSRF policy and delivery engine
+internal/httpapi/      REST API under /api/v1, /healthz, /readyz and /metrics
 internal/web/          public HTML interface: templates, CSS, JS, fonts
-trmnl/                 four TRMNL plugins, transforms and tests
+trmnl/                 five TRMNL plugins, transforms and tests
 scripts/               seed scraper, font fetcher, TRMNL packaging
 ```
 
@@ -476,11 +819,14 @@ validation, stats, admin/session lifecycle, entry edits and bulk deletes,
 settings), photo derivatives and backfill, password
 hashing and OIDC discovery/token verification, the rate limiter, the JSON API,
 the admin flows (setup, login, CSRF, edit, delete, original photo download,
-Umami and webhook settings, webhook test-fire), the Atom feed (validity,
+Umami and webhook settings, webhook test-fire, the webhook endpoint page and
+its role/CSRF rules), the Atom feed (validity,
 escaping, ordering, limit, ETag/304, trash exclusion, autodiscovery), webhook
-payloads and HMAC signing, and the public web layer (partial rendering, HTMX
+payloads, presets, HMAC signing, SSRF policy, retry/backoff/drop accounting,
+migrations 001-014, `/metrics` exposition and `/readyz`, and the public web layer (partial rendering, HTMX
 flows, no-JS flows, permalinks and Open Graph metadata, rate-limit errors, Umami
-injection, cache headers).
+injection, cache headers, the A–Z word index, person pages and feeds, the random
+draw and the cursor-paged photo gallery).
 
 The TRMNL transforms have their own stdlib-only Python tests:
 
@@ -493,7 +839,7 @@ make trmnl-test
 - **CI** (`.github/workflows/ci.yaml`) — builds, vets, lints
   (`golangci-lint`) and tests every push and pull request, and uploads a
   coverage report.
-- **TRMNL plugins** (`trmnl.yaml`) — tests the transforms, lints all four
+- **TRMNL plugins** (`trmnl.yaml`) — tests the transforms, lints all five
   plugins, and pushes them to TRMNL on `main` when `TRML_TOKEN` is configured.
 - **Releases** (`release.yaml`) — [semantic-release](https://semantic-release.gitbook.io/)
   turns Conventional Commits into tags, GitHub releases and a changelog,

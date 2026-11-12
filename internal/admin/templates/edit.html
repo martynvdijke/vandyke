@@ -48,6 +48,21 @@
       </label>
     </div>
 
+    <fieldset class="tag-fieldset">
+      <legend class="field-label">Tags</legend>
+      <p class="field-hint">The submitted checkboxes are the complete set. Leave every box clear to remove all tags. <a href="/admin/tags">Manage the vocabulary</a>.</p>
+      <div class="tag-options">
+        {{range .Tags}}
+        <label class="filter-toggle tag-option">
+          <input type="checkbox" name="tags" value="{{.ID}}"{{if .Selected}} checked{{end}}>
+          <span class="tag-chip"><span class="tag-dot" style="background-color:{{.Color}}" aria-hidden="true"></span>{{.Name}}</span>
+        </label>
+        {{else}}
+        <p class="field-hint">No tags exist yet. <a href="/admin/tags">Create the first one</a>.</p>
+        {{end}}
+      </div>
+    </fieldset>
+
     {{if .Entry.PhotoURL}}
     <div class="admin-current-photo">
       <span class="field-label">Current photo</span>

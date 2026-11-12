@@ -100,6 +100,15 @@
   });
 
   document.addEventListener("submit", function (event) {
+    if (event.target.matches("[data-confirm-tag-delete]")) {
+      var tag = event.target.getAttribute("data-tag-name") || "this tag";
+      var count = event.target.getAttribute("data-tag-count") || "0";
+      var noun = count === "1" ? " entry loses" : " entries lose";
+      if (!window.confirm("Delete the tag " + tag + "? " + count + noun + " it. This cannot be undone.")) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (event.target.matches("[data-confirm-delete]")) {
       if (!window.confirm("Delete this entry and its photo?")) {
         event.preventDefault();

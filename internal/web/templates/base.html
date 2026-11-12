@@ -5,6 +5,8 @@
       <nav class="masthead-nav" aria-label="Main">
         <a class="nav-link" href="/?info=1" data-dialog-open="#info-dialog" aria-haspopup="dialog" aria-controls="info-dialog" aria-expanded="false">The story</a>
         <a class="nav-link" href="/stats">Stats</a>
+        <a class="nav-link" href="/words">Words</a>
+        <a class="nav-link" href="/photos">Photos</a>
         <a class="nav-link nav-link-muted" href="/api/v1/entries">API</a>
         <a class="nav-link nav-link-muted" href="/admin/login">Sign in</a>
         <button class="nav-link theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" aria-pressed="false">
@@ -27,6 +29,9 @@
         <a href="https://teslan.thor.edu/">TesLAN</a>
         <a href="https://thor.edu/committee/lanco">LANCo committee</a>
         <a href="/stats">Statistics</a>
+        <a href="/words">Words</a>
+        <a href="/photos">Photographs</a>
+        <a href="/tags">Tags</a>
         <a href="/api/v1/entries">JSON API</a>
         <a href="/healthz">Health</a>
       </nav>
@@ -42,6 +47,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{if .Title}}{{.Title}}{{else}}vanDyke — the LANCo misspelling ledger{{end}}</title>
   <meta name="description" content="{{if .Description}}{{.Description}}{{else}}A ledger of spelling errors, misheard words and creative typos. Born as an internal joke of the LANCo committee.{{end}}">
+  {{if .CanonicalURL}}<link rel="canonical" href="{{.CanonicalURL}}">{{end}}
+  {{if .Robots}}<meta name="robots" content="{{.Robots}}">{{end}}
+  {{if .OGImage}}
+  <meta property="og:site_name" content="vanDyke">
+  <meta property="og:type" content="{{if .OGType}}{{.OGType}}{{else}}website{{end}}">
+  <meta property="og:title" content="{{if .Title}}{{.Title}}{{else}}vanDyke — the LANCo misspelling ledger{{end}}">
+  <meta property="og:description" content="{{if .Description}}{{.Description}}{{else}}A ledger of spelling errors, misheard words and creative typos. Born as an internal joke of the LANCo committee.{{end}}">
+  <meta property="og:url" content="{{.CanonicalURL}}">
+  <meta property="og:image" content="{{.OGImage}}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{{.OGImageAlt}}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="{{.OGImage}}">
+  <meta name="twitter:title" content="{{if .Title}}{{.Title}}{{else}}vanDyke — the LANCo misspelling ledger{{end}}">
+  <meta name="twitter:description" content="{{if .Description}}{{.Description}}{{else}}A ledger of spelling errors, misheard words and creative typos.{{end}}">
+  {{end}}
+  <link rel="search" type="application/opensearchdescription+xml" title="vanDyke ledger search" href="/opensearch.xml">
   <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
@@ -76,10 +99,11 @@
 
 {{define "ledger-toolbar"}}
       <form id="search-form" class="toolbar" action="{{if .ToolbarAction}}{{.ToolbarAction}}{{else}}/{{end}}" method="get"
-            hx-get="/entries" hx-target="#ledger" hx-swap="outerHTML"
+            hx-get="{{.Ledger.BasePath}}" hx-target="#ledger" hx-swap="outerHTML"
             hx-trigger="submit, input changed delay:300ms, search, change">
         <input type="hidden" name="sort" value="{{.Ledger.Query.Sort}}">
         <input type="hidden" name="order" value="{{.Ledger.Query.Order}}">
+        {{range .Ledger.Query.Tags}}<input type="hidden" name="tag" value="{{.}}">{{end}}
         <label class="searchbox">
           <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5 L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <input type="search" name="q" value="{{.Ledger.Query.Q}}" placeholder='Search — "exact phrase", -exclude' autocomplete="off" aria-label="Search the ledger" aria-describedby="search-hint">
@@ -104,6 +128,12 @@
           <span>To</span>
           <input type="date" name="to" value="{{.Ledger.Query.To}}" aria-label="Filter to date">
         </label>
+        {{if .Ledger.LockedPerson}}
+        <span class="pagesize pagesize-person is-locked">
+          <span>Person</span>
+          <strong class="person-chip">{{.Ledger.LockedPerson}}</strong>
+        </span>
+        {{else}}
         <label class="pagesize pagesize-person">
           <span>Person</span>
           <select name="person" aria-label="Filter by person">
@@ -111,6 +141,7 @@
             {{range .Ledger.Persons}}<option value="{{.}}"{{if eq . $.Ledger.Query.Person}} selected{{end}}>{{.}}</option>{{end}}
           </select>
         </label>
+        {{end}}
         <label class="pagesize">
           <span>Rows</span>
           <select name="per_page" aria-label="Entries per page">
@@ -130,6 +161,8 @@
       <h1 class="hero-title">van<span class="hero-dyke">Dyke<svg class="hero-scribble" viewBox="0 0 240 16" preserveAspectRatio="none" aria-hidden="true"><path d="M4 11 C 64 4, 156 3, 236 9" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg></span></h1>
       <p class="hero-lede">A ledger of <em>verschrijvingen</em> — misheard words, creative typos and other slips of the pen, collected by the LANCo committee. It began when M.&nbsp;van Dijke's surname turned out to double as a Dutch dictionary.</p>
     </section>
+
+    {{if .Slip}}{{template "slip" .}}{{end}}
 
     <section class="stats-block" aria-label="Ledger statistics">
       <div class="stats">

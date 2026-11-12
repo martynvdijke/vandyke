@@ -64,6 +64,7 @@ type Config struct {
 	AdminLoginRatePerMinute float64
 	AdminLoginRateBurst     int
 	PublicBaseURL           string
+	MetricsToken            string
 	Umami                   Umami
 	Webhook                 Webhook
 	OIDC                    OIDC
@@ -75,6 +76,7 @@ func Load() (Config, error) {
 		Port:            getenv("PORT", "8080"),
 		DBPath:          getenv("DB_PATH", "./data/vandyke.db"),
 		AdminSetupToken: os.Getenv("ADMIN_SETUP_TOKEN"),
+		MetricsToken:    strings.TrimSpace(os.Getenv("METRICS_TOKEN")),
 		Umami: Umami{
 			URL:       os.Getenv("UMAMI_URL"),
 			WebsiteID: os.Getenv("UMAMI_WEBSITE_ID"),

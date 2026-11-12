@@ -1,0 +1,28 @@
+{{define "tags-page"}}{{template "page-head" .}}
+  <main class="page tags-page" id="content" tabindex="-1">
+    <section class="tags-hero">
+      <p class="eyebrow">The vocabulary</p>
+      <h1 class="tags-title">Tags</h1>
+      <p class="tags-lede">Every kind of slip the committee distinguishes — and how many entries carry each label. Tags are curated by an admin; nothing is classified automatically.</p>
+    </section>
+
+    {{if .Tags}}
+    <ul class="tag-index">
+      {{range .Tags}}
+      <li class="tag-index-item">
+        <a class="tag-index-link" href="/tags/{{.Slug}}">
+          <span class="tag-dot" style="background-color:{{.Color}}" aria-hidden="true"></span>
+          <span class="tag-index-name">{{.Name}}</span>
+          <span class="tag-index-count">{{.LiveCount}} {{if eq .LiveCount 1}}entry{{else}}entries{{end}}</span>
+        </a>
+      </li>
+      {{end}}
+    </ul>
+    {{else}}
+    <div class="empty">
+      <p class="empty-title">No tags yet</p>
+      <p class="empty-text">The vocabulary is empty. An admin can add the first tag in the admin interface.</p>
+    </div>
+    {{end}}
+  </main>
+{{template "page-foot" .}}{{end}}

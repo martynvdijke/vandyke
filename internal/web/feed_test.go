@@ -68,7 +68,7 @@ func TestFeedMapsEntriesAndEscapesText(t *testing.T) {
 		t.Fatalf("CreateEntry newest: %v", err)
 	}
 	// Make the unattributed entry unambiguously newest.
-	if _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
+	if _, _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
 		ID: newest.ID, Word: "nieuwste", Meaning: "newest slip",
 		CreatedAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC),
 	}); err != nil {
@@ -142,7 +142,7 @@ func TestFeedOrderingAndLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	if _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
+	if _, _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
 		ID: newest.ID, Word: "allernieuwste", Meaning: "the newest",
 		CreatedAt: time.Date(2031, 6, 7, 8, 9, 10, 0, time.UTC),
 	}); err != nil {

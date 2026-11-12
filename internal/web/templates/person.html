@@ -1,0 +1,60 @@
+{{define "person-page"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <meta name="description" content="{{.Description}}">
+  <link rel="canonical" href="{{.CanonicalURL}}">
+  <meta name="robots" content="{{.Robots}}">
+  <meta property="og:site_name" content="vanDyke">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{.Person}} · vanDyke">
+  <meta property="og:description" content="{{.Description}}">
+  <meta property="og:url" content="{{.CanonicalURL}}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{.Person}} · vanDyke">
+  <meta name="twitter:description" content="{{.Description}}">
+  <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="alternate" type="application/atom+xml" title="The vanDyke Corrections Ledger" href="/feed.xml">
+  <link rel="alternate" type="application/atom+xml" title="Slips by {{.Person}}" href="{{.FeedURL}}">
+  <link rel="search" type="application/opensearchdescription+xml" title="vanDyke ledger search" href="/opensearch.xml">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  {{if .Umami.Enabled}}<script defer src="{{.Umami.URL}}" data-website-id="{{.Umami.WebsiteID}}"{{if .Umami.Domains}} data-domains="{{.Umami.Domains}}"{{end}}></script>{{end}}
+  <script src="/static/js/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="grain" aria-hidden="true"></div>
+
+  {{template "masthead" .}}
+
+  <main class="page ledger-page person-page" id="content" tabindex="-1">
+    <header class="person-hero">
+      <p class="eyebrow">Attributed slips</p>
+      <h1 class="person-title">{{.Person}}</h1>
+      <p class="person-lede">{{.Count}} {{if eq .Count 1}}slip{{else}}slips{{end}} carry this name, from {{formatDateP .FirstAt}} to {{formatDateP .LastAt}}. <a href="{{.FeedURL}}">Atom feed</a></p>
+    </header>
+
+    <section class="workspace" aria-label="Ledger">
+      {{template "ledger-toolbar" .}}
+
+      {{template "ledger" .}}
+    </section>
+  </main>
+
+  {{template "footer" .}}
+
+  <a class="fab" href="/?add=1" data-dialog-open="#add-dialog" aria-label="Add a misspelling" aria-haspopup="dialog" aria-controls="add-dialog" aria-expanded="false">+</a>
+
+  {{template "add-dialog" .}}
+  {{template "info-dialog" .}}
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <script src="/static/vendor/htmx.min.js" defer></script>
+</body>
+</html>{{end}}

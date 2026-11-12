@@ -1,0 +1,18 @@
+<div class="layout layout--col layout--stretch gap">
+  {% if error %}
+    <div class="item"><div class="content"><div class="value value--small">{{ error }}</div></div></div>
+  {% else %}
+    {% if has_photo %}
+      <div class="item"><img class="image image-cover image-dither rounded" src="{{ photo_url }}" alt="Photo of the day's misspelling" /></div>
+    {% endif %}
+    <div class="item">
+      <div class="content">
+        <div class="label label--small">vanDyke · slip of the day · {{ date }}</div>
+        <div class="value value--small">{% if word %}{{ word }}{% else %}photo entry{% endif %}</div>
+        <div class="label label--small">→ {% if meaning %}{{ meaning }}{% else %}photo entry{% endif %}</div>
+        {% if person %}<div class="label label--small">by {{ person }}</div>{% endif %}
+      </div>
+    </div>
+  {% endif %}
+</div>
+<div class="title_bar"><span class="title">vanDyke</span></div>

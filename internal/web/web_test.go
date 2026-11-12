@@ -45,7 +45,7 @@ func newTestWebWithStore(t *testing.T, umami config.Umami, limiter *ratelimit.Li
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	w, err := New(st, limiter, func() config.Umami { return umami }, func() config.Webhook { return config.Webhook{} }, false, "", discardLogger())
+	w, err := New(st, limiter, func() config.Umami { return umami }, testEngine(t, st, config.Webhook{}), false, "", nil, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -54,6 +54,19 @@ func newTestWebWithStore(t *testing.T, umami config.Umami, limiter *ratelimit.Li
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, st
+}
+
+func testEngine(t *testing.T, st *store.Store, cfg config.Webhook) *webhook.Engine {
+	t.Helper()
+	return testEngineWithLogger(t, st, cfg, discardLogger())
+}
+
+func testEngineWithLogger(t *testing.T, st *store.Store, cfg config.Webhook, logger *slog.Logger) *webhook.Engine {
+	t.Helper()
+	engine := webhook.NewEngine(st, func() config.Webhook { return cfg }, "", nil, logger)
+	engine.Start()
+	t.Cleanup(engine.Close)
+	return engine
 }
 
 func fetch(t *testing.T, srv *httptest.Server, path string, headers map[string]string) (int, http.Header, string) {
@@ -547,7 +560,9 @@ func TestPermalinkPage(t *testing.T) {
 		`property="og:url"`,
 		`rel="canonical"`,
 		`href="` + srv.URL + `/e/` + id + `"`,
-		`data-copy-link="` + srv.URL + `/e/` + id + `"`,
+		`data-share-url="` + srv.URL + `/e/` + id + `"`,
+		`data-share-title="perm → link"`,
+		`data-share-text="Entry #`,
 		"Copy link",
 		"Back to the ledger",
 		"perm",
@@ -556,6 +571,14 @@ func TestPermalinkPage(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("permalink does not contain %q", want)
 		}
+	}
+
+	// The share control is a real anchor, so a visitor without JavaScript can
+	// still open or copy the canonical URL from the browser's link menu.
+	anchor := `<a class="btn btn-primary" href="` + srv.URL + `/e/` + id +
+		`" data-share-url="` + srv.URL + `/e/` + id + `"`
+	if !strings.Contains(body, anchor) {
+		t.Errorf("share control is not an anchor carrying the canonical href: %q", anchor)
 	}
 
 	status, _, missing := fetch(t, srv, "/e/999999", nil)
@@ -718,7 +741,7 @@ func newTestWebWithBaseURL(t *testing.T, baseURL string) (*httptest.Server, *sto
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, func() config.Webhook { return config.Webhook{} }, false, baseURL, discardLogger())
+	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, testEngine(t, st, config.Webhook{}), false, baseURL, nil, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -795,12 +818,16 @@ func TestDialogTriggersResolveOnMastheadPages(t *testing.T) {
 
 func TestPublicDocumentsExposeSkipLinkMainAndManifest(t *testing.T) {
 	srv, st := newTestWebWithStore(t, config.Umami{}, ratelimit.New(1000, 100))
-	entry, err := st.CreateEntry(t.Context(), "structure", "landmark", "", nil)
+	entry, err := st.CreateEntry(t.Context(), "structure", "landmark", "Structure Test", nil)
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
 	mainPattern := regexp.MustCompile(`<main\b`)
-	paths := []string{"/", "/entries", "/stats", "/e/" + strconv.FormatInt(entry.ID, 10)}
+	paths := []string{
+		"/", "/entries", "/stats", "/words", "/photos",
+		"/p/Structure%20Test",
+		"/e/" + strconv.FormatInt(entry.ID, 10),
+	}
 
 	for _, path := range paths {
 		status, _, body := fetch(t, srv, path, nil)
@@ -955,7 +982,7 @@ func TestDiscoverabilityRoutesCarrySecurityHeaders(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, func() config.Webhook { return config.Webhook{} }, false, "", discardLogger())
+	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, testEngine(t, st, config.Webhook{}), false, "", nil, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -1055,7 +1082,7 @@ func TestLedgerDateRangeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse date: %v", err)
 	}
-	if _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
+	if _, _, err := st.UpdateEntry(t.Context(), store.EntryUpdate{
 		ID: entry.ID, Word: "datumprobe", Meaning: "a dated slip", CreatedAt: created,
 	}); err != nil {
 		t.Fatalf("UpdateEntry: %v", err)
@@ -1104,8 +1131,8 @@ func TestWebhookDispatchDoesNotBlockCreate(t *testing.T) {
 
 	w, err := New(st, ratelimit.New(1000, 100),
 		func() config.Umami { return config.Umami{} },
-		func() config.Webhook { return config.Webhook{URL: receiver.URL, Secret: "s3cret"} },
-		false, "", discardLogger())
+		testEngine(t, st, config.Webhook{URL: receiver.URL, Secret: "s3cret"}),
+		false, "", nil, discardLogger())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1215,8 +1242,8 @@ func TestWebhookFailureDoesNotAffectCreate(t *testing.T) {
 	logs := &capturedLog{}
 	w, err := New(st, ratelimit.New(1000, 100),
 		func() config.Umami { return config.Umami{} },
-		func() config.Webhook { return config.Webhook{URL: receiver.URL} },
-		false, "", slog.New(logs))
+		testEngineWithLogger(t, st, config.Webhook{URL: receiver.URL}, slog.New(logs)),
+		false, "", nil, slog.New(logs))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

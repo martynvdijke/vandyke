@@ -1,10 +1,8 @@
 package admin
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"vandyke.thor.edu/vandyke/internal/config"
@@ -30,6 +28,8 @@ type settingsData struct {
 	WebhookEnvURL       string
 	WebhookSecretSet    bool
 	WebhookEnvSecretSet bool
+	WebhookActive       bool
+	WebhookSuppressed   bool
 	WebhookResult       string
 }
 
@@ -43,6 +43,10 @@ func (a *Admin) settingsPage(r *http.Request, errMsg string) (settingsData, erro
 	}
 	state := stateFrom(r)
 	effective := a.settings.CurrentWebhook()
+	legacy, err := a.hooks.LegacyStatus(r.Context())
+	if err != nil {
+		return settingsData{}, err
+	}
 	return settingsData{
 		Admin:               state.Admin,
 		Umami:               a.settings.Current(),
@@ -56,6 +60,8 @@ func (a *Admin) settingsPage(r *http.Request, errMsg string) (settingsData, erro
 		WebhookEnvURL:       a.settings.EnvWebhook().URL,
 		WebhookSecretSet:    effective.Secret != "",
 		WebhookEnvSecretSet: a.settings.EnvWebhook().Secret != "",
+		WebhookActive:       legacy.Configured && legacy.Active,
+		WebhookSuppressed:   legacy.Configured && !legacy.Active,
 	}, nil
 }
 
@@ -88,18 +94,13 @@ func (a *Admin) handleSaveSettings(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.settings.Save(r.Context(), values); err != nil {
-		state := stateFrom(r)
-		a.render(rw, http.StatusUnprocessableEntity, "admin-settings", settingsData{
-			Admin:            state.Admin,
-			Umami:            a.settings.Current(),
-			Env:              a.settings.Env(),
-			CSRF:             state.Session.CSRFToken,
-			Values:           values,
-			Error:            capitalize(err.Error()),
-			WebhookURL:       a.settings.CurrentWebhook().URL,
-			WebhookEnvURL:    a.settings.EnvWebhook().URL,
-			WebhookSecretSet: a.settings.CurrentWebhook().Secret != "",
-		})
+		data, pageErr := a.settingsPage(r, capitalize(err.Error()))
+		if pageErr != nil {
+			a.internalError(rw, pageErr)
+			return
+		}
+		data.Values = values
+		a.render(rw, http.StatusUnprocessableEntity, "admin-settings", data)
 		return
 	}
 	var changed []string
@@ -163,9 +164,24 @@ func (a *Admin) handleWebhookTestFire(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	effective := a.settings.CurrentWebhook()
-	if !effective.Enabled() {
-		data.WebhookResult = "No webhook configured; no request was sent."
+	legacy, err := a.hooks.LegacyStatus(r.Context())
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	if !legacy.Configured {
+		data.WebhookResult = "No legacy webhook configured; no request was sent."
+		a.render(rw, http.StatusOK, "admin-settings", data)
+		return
+	}
+	if !legacy.Active {
+		data.WebhookResult = "The legacy webhook is suppressed while a persisted endpoint is enabled. Manage endpoints at /admin/webhooks."
+		a.render(rw, http.StatusOK, "admin-settings", data)
+		return
+	}
+	endpoint, ok := a.hooks.LegacyEndpoint()
+	if !ok {
+		data.WebhookResult = "No legacy webhook configured; no request was sent."
 		a.render(rw, http.StatusOK, "admin-settings", data)
 		return
 	}
@@ -184,25 +200,15 @@ func (a *Admin) handleWebhookTestFire(rw http.ResponseWriter, r *http.Request) {
 
 	base := httpx.BaseURL(r, a.cfg.PublicBaseURL, a.cfg.TrustProxy)
 	payload := webhook.BuildPayload(entry, fmt.Sprintf("%s/e/%d", base, entry.ID))
-	status, err := a.hooks.Send(r.Context(), payload)
+	status, err := a.hooks.SendTest(r.Context(), endpoint, payload)
 	if err != nil {
 		a.logger.Warn("webhook test-fire failed", "error", err)
-		data.WebhookResult = "Test delivery failed: " + deliveryError(err)
+		data.WebhookResult = "Test delivery failed: " + webhook.SanitiseError(err, endpoint.URL)
 		a.render(rw, http.StatusOK, "admin-settings", data)
 		return
 	}
 	data.WebhookResult = fmt.Sprintf("Test delivery returned HTTP %d.", status)
 	a.render(rw, http.StatusOK, "admin-settings", data)
-}
-
-// deliveryError strips the target URL from a transport error so credentials
-// embedded in the operator-supplied URL cannot be echoed into HTML.
-func deliveryError(err error) string {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr.Err != nil {
-		return urlErr.Err.Error()
-	}
-	return err.Error()
 }
 
 // handleSearchRebuild regenerates the trigram index from the live entries. It

@@ -2,6 +2,8 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
+	"vandyke.thor.edu/vandyke/internal/metrics"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
+	"vandyke.thor.edu/vandyke/internal/slip"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/upload"
 	"vandyke.thor.edu/vandyke/internal/webhook"
@@ -30,18 +33,26 @@ type API struct {
 	limiter       *ratelimit.Limiter
 	trustProxy    bool
 	publicBaseURL string
-	hooks         *webhook.Dispatcher
+	hooks         *webhook.Engine
+	metrics       *metrics.Registry
+	metricsToken  string
+	slip          *slip.Resolver
 	logger        *slog.Logger
 }
 
-// New creates the API.
-func New(st *store.Store, limiter *ratelimit.Limiter, trustProxy bool, publicBaseURL string, webhookConfig func() config.Webhook, logger *slog.Logger) *API {
+// New creates the API. hooks is the process-wide delivery engine and registry
+// the metrics registry; both may be shared with the web and admin servers.
+func New(st *store.Store, limiter *ratelimit.Limiter, trustProxy bool, publicBaseURL string,
+	hooks *webhook.Engine, registry *metrics.Registry, metricsToken string, logger *slog.Logger) *API {
 	return &API{
 		store:         st,
 		limiter:       limiter,
 		trustProxy:    trustProxy,
 		publicBaseURL: publicBaseURL,
-		hooks:         webhook.New(webhookConfig, logger),
+		hooks:         hooks,
+		metrics:       registry,
+		metricsToken:  metricsToken,
+		slip:          slip.New(st),
 		logger:        logger,
 	}
 }
@@ -49,16 +60,69 @@ func New(st *store.Store, limiter *ratelimit.Limiter, trustProxy bool, publicBas
 // Register wires the API routes into mux.
 func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", a.handleHealth)
+	mux.HandleFunc("GET /metrics", a.handleMetrics)
+	mux.HandleFunc("GET /readyz", a.handleReady)
 	mux.HandleFunc("GET /api/v1/entries", a.handleListEntries)
 	mux.HandleFunc("GET /api/v1/entries/{id}", a.handleGetEntry)
 	mux.HandleFunc("POST /api/v1/entries", a.rateLimited(a.handleCreateEntry))
 	mux.HandleFunc("GET /api/v1/entries/{id}/photo", a.handleGetEntryPhoto)
+	mux.HandleFunc("GET /api/v1/random", a.handleRandom)
+	mux.HandleFunc("GET /api/v1/slip", a.handleSlip)
 	mux.HandleFunc("GET /api/v1/stats", a.handleStats)
 	mux.HandleFunc("GET /api/v1/persons", a.handlePersons)
 }
 
 func (a *API) handleHealth(rw http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(rw, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleMetrics serves the hand-rolled Prometheus exposition. It is public
+// unless METRICS_TOKEN is configured, in which case it requires a constant-time
+// bearer match.
+func (a *API) handleMetrics(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set("Cache-Control", "no-store")
+	if a.metricsToken != "" {
+		got := r.Header.Get("Authorization")
+		want := "Bearer " + a.metricsToken
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+			rw.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+	}
+	if a.metrics == nil {
+		rw.WriteHeader(http.StatusOK)
+		return
+	}
+	rw.Header().Set("Content-Type", metrics.ContentType)
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.metrics.Write(ctx, rw); err != nil {
+		a.logger.Warn("write metrics", "error", err)
+	}
+}
+
+// handleReady checks SQLite and the applied migration set. It never appears in
+// the public JSON API namespace and never needs a token, because probes must
+// work without credentials.
+func (a *API) handleReady(rw http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	state := a.store.CheckReady(ctx)
+	checks := map[string]string{"database": "ok", "migrations": "ok"}
+	status := http.StatusOK
+	overall := "ready"
+	if !state.Database {
+		checks["database"] = "error"
+	}
+	if !state.Migrations {
+		checks["migrations"] = "error"
+	}
+	if !state.Database || !state.Migrations {
+		status = http.StatusServiceUnavailable
+		overall = "unavailable"
+	}
+	rw.Header().Set("Cache-Control", "no-store")
+	httpx.WriteJSON(rw, status, map[string]any{"status": overall, "checks": checks})
 }
 
 func (a *API) handleListEntries(rw http.ResponseWriter, r *http.Request) {
@@ -84,6 +148,7 @@ func (a *API) handleListEntries(rw http.ResponseWriter, r *http.Request) {
 		Year:     queryInt(r, "year", 0),
 		From:     from,
 		To:       to,
+		Tags:     r.URL.Query()["tag"],
 	})
 	if err != nil {
 		a.logger.Error("list entries", "error", err)
@@ -127,6 +192,7 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 	}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&input); err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		httpx.WriteError(rw, http.StatusBadRequest, "invalid_json", "request body must be JSON: {\"word\": \"...\", \"meaning\": \"...\"} or multipart/form-data with an optional photo")
 		return
 	}
@@ -135,10 +201,12 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 	input.Meaning = strings.TrimSpace(input.Meaning)
 	input.Person = strings.TrimSpace(input.Person)
 	if err := store.ValidateEntry(input.Word, input.Meaning, false); err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	if err := store.ValidatePerson(input.Person); err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
@@ -149,6 +217,7 @@ func (a *API) handleCreateEntry(rw http.ResponseWriter, r *http.Request) {
 func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(rw, r.Body, maxUploadBodyBytes)
 	if err := r.ParseMultipartForm(64 << 10); err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		if r.MultipartForm != nil {
 			_ = r.MultipartForm.RemoveAll()
 		}
@@ -167,14 +236,17 @@ func (a *API) createEntryMultipart(rw http.ResponseWriter, r *http.Request) {
 
 	photo, err := upload.Photo(r, "photo")
 	if err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	if err := store.ValidateEntry(word, meaning, photo != nil); err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	if err := store.ValidatePerson(person); err != nil {
+		a.metrics.IncEntryAddition("invalid")
 		httpx.WriteError(rw, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
@@ -186,13 +258,16 @@ func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, m
 	entry, err := a.store.CreateEntry(r.Context(), word, meaning, person, photo)
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
+			a.metrics.IncEntryAddition("duplicate")
 			httpx.WriteError(rw, http.StatusConflict, "duplicate_entry", "that entry is already in the ledger")
 			return
 		}
+		a.metrics.IncEntryAddition("error")
 		a.logger.Error("create entry", "error", err)
 		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not create entry")
 		return
 	}
+	a.metrics.IncEntryAddition("created")
 	rw.Header().Set("Location", fmt.Sprintf("/api/v1/entries/%d", entry.ID))
 	// The public API carries no admin identity, so the audit row has a null
 	// actor and records the client IP instead.
@@ -205,9 +280,9 @@ func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, m
 	}); err != nil {
 		a.logger.Error("record audit", "action", "entry.create", "error", err)
 	}
-	// Fire-and-forget: dispatch returns before the receiver is contacted.
+	// Fire-and-forget: emission returns before any receiver is contacted.
 	base := httpx.BaseURL(r, a.publicBaseURL, a.trustProxy)
-	a.hooks.Dispatch(webhook.BuildPayload(entry, fmt.Sprintf("%s/e/%d", base, entry.ID)))
+	a.hooks.Emit(webhook.Change{Event: webhook.EventEntryCreated, Entry: entry, BaseURL: base})
 	httpx.WriteJSON(rw, http.StatusCreated, entry)
 }
 
@@ -261,6 +336,69 @@ func (a *API) handleGetEntryPhoto(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleRandom draws one live entry with the optional photo and person
+// filters. It is a sibling of the collection, not a literal under the id path,
+// so GET /api/v1/entries/random keeps answering 400 invalid_id.
+func (a *API) handleRandom(rw http.ResponseWriter, r *http.Request) {
+	entry, err := a.store.RandomEntry(r.Context(),
+		strings.TrimSpace(r.URL.Query().Get("person")),
+		queryOptionalBool(r, "photo"))
+	rw.Header().Set("Cache-Control", "no-store")
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpx.WriteError(rw, http.StatusNotFound, "not_found", "no entry matches the draw")
+	case err != nil:
+		a.logger.Error("random entry", "error", err)
+		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not draw an entry")
+	default:
+		httpx.WriteJSON(rw, http.StatusOK, entry)
+	}
+}
+
+// slipResponse is the JSON surface for the day's pinned entry. The entry uses
+// the same shape as GET /api/v1/entries/{id}.
+type slipResponse struct {
+	Date  string      `json:"date"`
+	Entry store.Entry `json:"entry"`
+}
+
+// handleSlip serves the deterministic slip of the day with a strong ETag and a
+// short public cache lifetime, mirroring the Atom feed's conditional pattern.
+func (a *API) handleSlip(rw http.ResponseWriter, r *http.Request) {
+	today, err := a.slip.Today(r.Context())
+	switch {
+	case errors.Is(err, slip.ErrNoSlip):
+		httpx.WriteError(rw, http.StatusNotFound, "not_found", "the ledger has no entry for today")
+		return
+	case err != nil:
+		a.logger.Error("resolve daily slip", "error", err)
+		httpx.WriteError(rw, http.StatusInternalServerError, "internal_error", "could not load the slip")
+		return
+	}
+
+	tag := fmt.Sprintf(`"slip-%s-%d"`, today.Date, today.Entry.ID)
+	rw.Header().Set("ETag", tag)
+	rw.Header().Set("Cache-Control", "public, max-age=60")
+	if etagMatches(r.Header.Get("If-None-Match"), tag) {
+		rw.WriteHeader(http.StatusNotModified)
+		return
+	}
+	httpx.WriteJSON(rw, http.StatusOK, slipResponse{Date: today.Date, Entry: today.Entry})
+}
+
+// etagMatches reports whether an If-None-Match header names tag. Weak prefixes
+// and "*" are accepted, matching the feed's helper.
+func etagMatches(header, tag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == tag || candidate == "*" {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *API) handleStats(rw http.ResponseWriter, r *http.Request) {
 	stats, err := a.store.Stats(r.Context())
 	if err != nil {
@@ -296,6 +434,8 @@ func (a *API) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		ip := httpx.ClientIP(r, a.trustProxy)
 		if !a.limiter.Allow(ip) {
+			a.metrics.IncRateLimited()
+			a.metrics.IncEntryAddition("rate_limited")
 			rw.Header().Set("Retry-After", strconv.Itoa(a.limiter.RetryAfterSeconds()))
 			httpx.WriteError(rw, http.StatusTooManyRequests, "rate_limited", "too many entries added; try again later")
 			return

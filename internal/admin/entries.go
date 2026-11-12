@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"vandyke.thor.edu/vandyke/internal/config"
+	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/upload"
+	"vandyke.thor.edu/vandyke/internal/webhook"
 )
 
 type pageData struct {
@@ -44,6 +47,7 @@ type editData struct {
 	Umami       config.Umami
 	CSRF        string
 	Entry       store.Entry
+	Tags        []tagOption
 	FormWord    string
 	FormMeaning string
 	FormPerson  string
@@ -289,11 +293,26 @@ func (a *Admin) handleEdit(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := stateFrom(r)
+	current, err := a.store.EntryTags(r.Context(), id)
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	selected := make([]int64, 0, len(current))
+	for _, tag := range current {
+		selected = append(selected, tag.ID)
+	}
+	tags, err := a.tagOptions(r.Context(), selected)
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
 	a.render(rw, http.StatusOK, "admin-edit", editData{
 		Admin:       state.Admin,
 		Umami:       a.settings.Current(),
 		CSRF:        state.Session.CSRFToken,
 		Entry:       entry,
+		Tags:        tags,
 		FormWord:    entry.Word,
 		FormMeaning: entry.Meaning,
 		FormPerson:  entry.Person,
@@ -345,7 +364,7 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 		a.renderEditError(rw, r, entry, word, meaning, person, dateRaw, removePhoto, capitalize(err.Error()))
 		return
 	}
-	updated, err := a.store.UpdateEntry(r.Context(), store.EntryUpdate{
+	previous, updated, err := a.store.UpdateEntry(r.Context(), store.EntryUpdate{
 		ID: id, Word: word, Meaning: meaning, Person: person, CreatedAt: createdAt,
 		Photo: photo, RemovePhoto: removePhoto,
 	})
@@ -357,38 +376,54 @@ func (a *Admin) handleUpdate(rw http.ResponseWriter, r *http.Request) {
 		a.renderEditError(rw, r, entry, word, meaning, person, dateRaw, removePhoto, capitalize(err.Error()))
 		return
 	}
-	var changed []string
-	if updated.Word != entry.Word {
-		changed = append(changed, "word")
+	// The submitted checkboxes are the complete set for this entry; an empty
+	// submission clears every tag.
+	if err := a.store.SetEntryTags(r.Context(), id, parseTagIDs(r.Form["tags"])); err != nil {
+		a.internalError(rw, err)
+		return
 	}
-	if updated.Meaning != entry.Meaning {
-		changed = append(changed, "meaning")
+	resulting, err := a.store.EntryTags(r.Context(), id)
+	if err != nil {
+		a.internalError(rw, err)
+		return
 	}
-	if updated.Person != entry.Person {
-		changed = append(changed, "person")
+	slugs := make([]string, 0, len(resulting))
+	for _, tag := range resulting {
+		slugs = append(slugs, tag.Slug)
 	}
-	if !updated.CreatedAt.Equal(entry.CreatedAt) {
-		changed = append(changed, "created_at")
-	}
-	if photo != nil || (removePhoto && entry.PhotoURL != "") {
-		changed = append(changed, "photo")
+	sort.Strings(slugs)
+	changes, changed := entryChanges(previous, updated)
+	if len(changes) > 0 {
+		a.hooks.Emit(webhook.Change{
+			Event:   webhook.EventEntryUpdated,
+			Entry:   updated,
+			Changes: changes,
+			BaseURL: httpx.BaseURL(r, a.cfg.PublicBaseURL, a.cfg.TrustProxy),
+		})
 	}
 	detail := "no field changed"
 	if len(changed) > 0 {
 		detail = "changed: " + strings.Join(changed, ",")
 	}
 	a.auditAs(r, "entry.update", strconv.FormatInt(id, 10), detail)
+	a.auditAs(r, "entry.tags", strconv.FormatInt(id, 10), "tags="+strings.Join(slugs, ","))
 	http.Redirect(rw, r, fmt.Sprintf("/admin?updated=1#entry-%d", id), http.StatusSeeOther)
 }
 
 func (a *Admin) renderEditError(rw http.ResponseWriter, r *http.Request, entry store.Entry,
 	word, meaning, person, date string, remove bool, message string) {
 	state := stateFrom(r)
+	tags, err := a.tagOptions(r.Context(), parseTagIDs(r.Form["tags"]))
+	if err != nil {
+		a.internalError(rw, err)
+		return
+	}
 	a.render(rw, http.StatusUnprocessableEntity, "admin-edit", editData{
 		Admin:       state.Admin,
 		Umami:       a.settings.Current(),
 		CSRF:        state.Session.CSRFToken,
 		Entry:       entry,
+		Tags:        tags,
 		FormWord:    word,
 		FormMeaning: meaning,
 		FormPerson:  person,
@@ -403,13 +438,15 @@ func (a *Admin) handleDelete(rw http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := a.store.SoftDeleteEntries(r.Context(), ids)
+	removed, err := a.store.SoftDeleteEntries(r.Context(), ids)
 	if err != nil {
 		a.internalError(rw, err)
 		return
 	}
-	a.auditAs(r, "entry.delete", joinIDs(ids), fmt.Sprintf("count=%d", n))
-	http.Redirect(rw, r, fmt.Sprintf("/admin?deleted=%d", n), http.StatusSeeOther)
+	a.auditAs(r, "entry.delete", joinIDs(ids), fmt.Sprintf("count=%d", len(removed)))
+	a.hooks.EmitBatch(webhook.ChangesFor(webhook.EventEntryDeleted, removed,
+		httpx.BaseURL(r, a.cfg.PublicBaseURL, a.cfg.TrustProxy)))
+	http.Redirect(rw, r, fmt.Sprintf("/admin?deleted=%d", len(removed)), http.StatusSeeOther)
 }
 
 // parseBulkIDs reads and validates the `ids` form field. It mirrors the
@@ -456,13 +493,15 @@ func (a *Admin) handleTrashRestore(rw http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := a.store.RestoreEntries(r.Context(), ids)
+	restored, err := a.store.RestoreEntries(r.Context(), ids)
 	if err != nil {
 		a.internalError(rw, err)
 		return
 	}
-	a.auditAs(r, "entry.restore", joinIDs(ids), fmt.Sprintf("count=%d", n))
-	http.Redirect(rw, r, fmt.Sprintf("/admin/trash?restored=%d", n), http.StatusSeeOther)
+	a.auditAs(r, "entry.restore", joinIDs(ids), fmt.Sprintf("count=%d", len(restored)))
+	a.hooks.EmitBatch(webhook.ChangesFor(webhook.EventEntryRestored, restored,
+		httpx.BaseURL(r, a.cfg.PublicBaseURL, a.cfg.TrustProxy)))
+	http.Redirect(rw, r, fmt.Sprintf("/admin/trash?restored=%d", len(restored)), http.StatusSeeOther)
 }
 
 func (a *Admin) handleTrashPurge(rw http.ResponseWriter, r *http.Request) {
@@ -470,13 +509,58 @@ func (a *Admin) handleTrashPurge(rw http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := a.store.PurgeEntries(r.Context(), ids)
+	purged, err := a.store.PurgeEntries(r.Context(), ids)
 	if err != nil {
 		a.internalError(rw, err)
 		return
 	}
-	a.auditAs(r, "entry.purge", joinIDs(ids), fmt.Sprintf("count=%d", n))
-	http.Redirect(rw, r, fmt.Sprintf("/admin/trash?purged=%d", n), http.StatusSeeOther)
+	a.auditAs(r, "entry.purge", joinIDs(ids), fmt.Sprintf("count=%d", len(purged)))
+	a.hooks.EmitBatch(webhook.ChangesFor(webhook.EventEntryPurged, purged,
+		httpx.BaseURL(r, a.cfg.PublicBaseURL, a.cfg.TrustProxy)))
+	http.Redirect(rw, r, fmt.Sprintf("/admin/trash?purged=%d", len(purged)), http.StatusSeeOther)
+}
+
+// entryChanges builds the bounded webhook diff and the audit field list from a
+// previous and updated entry snapshot. A no-op edit returns empty maps.
+func entryChanges(previous, updated store.Entry) (map[string]webhook.FieldChange, []string) {
+	changes := make(map[string]webhook.FieldChange)
+	if previous.Word != updated.Word {
+		changes["word"] = webhook.FieldChange{From: previous.Word, To: updated.Word}
+	}
+	if previous.Meaning != updated.Meaning {
+		changes["meaning"] = webhook.FieldChange{From: previous.Meaning, To: updated.Meaning}
+	}
+	if previous.Person != updated.Person {
+		changes["person"] = webhook.FieldChange{From: previous.Person, To: updated.Person}
+	}
+	if !previous.CreatedAt.Equal(updated.CreatedAt) {
+		changes["created_at"] = webhook.FieldChange{
+			From: previous.CreatedAt.UTC().Format(time.RFC3339),
+			To:   updated.CreatedAt.UTC().Format(time.RFC3339),
+		}
+	}
+	if previous.PhotoSHA256 != updated.PhotoSHA256 {
+		changes["photo"] = webhook.FieldChange{
+			From: photoHash(previous.PhotoSHA256),
+			To:   photoHash(updated.PhotoSHA256),
+		}
+	}
+	changed := make([]string, 0, len(changes))
+	for _, field := range []string{"word", "meaning", "person", "created_at", "photo"} {
+		if _, ok := changes[field]; ok {
+			changed = append(changed, field)
+		}
+	}
+	return changes, changed
+}
+
+// photoHash truncates a photo digest to the 12 hex characters the payload
+// contract uses, or null when there is no photo.
+func photoHash(sum string) any {
+	if len(sum) < 12 {
+		return nil
+	}
+	return sum[:12]
 }
 
 // joinIDs renders entry ids for an audit subject.
