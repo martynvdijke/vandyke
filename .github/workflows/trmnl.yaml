@@ -94,6 +94,10 @@ jobs:
           TRMNL_API_KEY: ${{ secrets.TRML_TOKEN }}
         run: |
           for d in trmnl/plugins/*/; do
+            if grep -Eq '^id: 0$' "$d/src/settings.yml"; then
+              echo "::warning::$d has no pinned TRMNL plugin ID yet; skipping push."
+              continue
+            fi
             echo "Pushing $d"
             trmnlp push --force --dir "$d"
           done
