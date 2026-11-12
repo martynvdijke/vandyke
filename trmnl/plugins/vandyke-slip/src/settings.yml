@@ -48,5 +48,5 @@ custom_fields:
   learn_more_url: https://github.com/martynvdijke/vandyke
   email_address: martyn@vandijke.xyz
 name: VanDyke Slip of the Day
-description: The day's misspelling, chosen by the ledger
+description: Today's slip, chosen by the ledger
 refresh_interval: 3600

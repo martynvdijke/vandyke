@@ -424,6 +424,12 @@ func (e *Engine) handleJob(j job) {
 		e.logger.Warn("persist webhook delivery", "endpoint_id", endpoint.ID, "entry_id", payload.ID, "error", err)
 		return
 	}
+	// The row is inserted as pending and immediately due, so the retry loop
+	// would otherwise claim it while this first POST is still in flight. That
+	// produced two concurrent attempts on one row, losing counter updates and
+	// delivering the same event more times than WebhookMaxAttempts.
+	e.markInflight(delivery.ID)
+	defer e.clearInflight(delivery.ID)
 	e.attempt(ctx, delivery, endpoint, payload)
 }
 
