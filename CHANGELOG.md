@@ -1,3 +1,17 @@
+# [1.11.0](https://github.com/martynvdijke/vandyke/compare/v1.10.3...v1.11.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **ci:** skip TRMNL plugins that have no pinned id ([6fe3745](https://github.com/martynvdijke/vandyke/commit/6fe3745452483486bddd70ce6df2485322200f11))
+* **ci:** stop duplicate webhook attempts and shorten the slip description ([e3dca12](https://github.com/martynvdijke/vandyke/commit/e3dca12ab3a40d11724bfc5c8837ff2ee9385d21))
+* **lint:** check the row closers in the year review queries ([a50f7b4](https://github.com/martynvdijke/vandyke/commit/a50f7b485715eac9942ea3ddab76473782578c74))
+
+
+### Features
+
+* **ledger:** add browse, tags, daily slip, webhooks v2 and observability ([d85efdc](https://github.com/martynvdijke/vandyke/commit/d85efdc5517e1081e079b4c421d8eb0175032d00))
+
 ## [1.10.3](https://github.com/martynvdijke/vandyke/compare/v1.10.2...v1.10.3) (2026-11-11)
 
 ## [1.10.2](https://github.com/martynvdijke/vandyke/compare/v1.10.1...v1.10.2) (2026-11-10)
