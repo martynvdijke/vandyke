@@ -168,6 +168,12 @@ stable envelope:
 | `GET /healthz` | Liveness probe (`{"status":"ok"}`). Never touches the database. |
 | `GET /readyz` | Readiness probe: SQLite answers and every embedded migration is applied. `200` with `{"status":"ready","checks":{"database":"ok","migrations":"ok"}}`, or `503` with `unavailable` and the coarse failing check. |
 | `GET /metrics` | Prometheus text exposition 0.0.4. Public unless `METRICS_TOKEN` is set. |
+| `GET /api/v1/events` | Server-sent event stream of new entries. |
+| `GET /api/v1/push/config` | Public notification config: channel flags, Firebase client options, VAPID public key. |
+| `POST /api/v1/push/devices` | Register or refresh an Android FCM token. |
+| `DELETE /api/v1/push/devices` | Remove an Android FCM token. |
+| `POST /api/v1/push/subscriptions` | Register or refresh a browser Web Push subscription. |
+| `DELETE /api/v1/push/subscriptions` | Remove a browser Web Push subscription. |
 
 Examples:
 
@@ -634,6 +640,54 @@ double-deliver. **Adopt as an endpoint** on `/admin/webhooks` copies the
 effective URL and secret into a real endpoint. The settings page labels the
 section as legacy, and its "Send legacy test event" action reports when the
 target is suppressed.
+
+### Notifications
+
+Every new entry can be announced over three independent channels. Notifications are
+off until the master switch is enabled, and each channel toggles separately.
+Configure everything under Admin → Settings → Notifications; credentials are stored
+in the database and entered at runtime, so no `google-services.json` is compiled into
+the Android build.
+
+| Channel | Transport | Reaches |
+| --- | --- | --- |
+| Realtime | `GET /api/v1/events` (server-sent events) | Open web pages and foregrounded apps |
+| Web Push | VAPID + service worker (`/sw.js`) | Browsers the visitor subscribed |
+| Android | FCM HTTP v1 | Android installs that registered an FCM token |
+
+Copy comes from templates with the placeholders `{word}`, `{meaning}`, `{person}`,
+`{id}`, and `{base}`. The click URL must contain `{id}` and may be absolute or
+site-relative, for example `/e/{id}`.
+
+**Web Push.** Use *Generate VAPID keys* in the settings card to create a key pair;
+the private key is write-only and never rendered back. Browsers only allow
+subscriptions on HTTPS origins (or `localhost`), and the service worker is served
+from `/sw.js` so it controls the whole origin.
+
+**Android (FCM).** Paste the Firebase service account's `project_id`,
+`client_email`, and `private_key`. The public client values (`api_key`, `app_id`,
+`sender_id`) are exposed by `GET /api/v1/push/config` so the app can initialize
+Firebase at runtime. Installs register with `POST /api/v1/push/devices`; tokens that
+FCM reports as unregistered are disabled automatically instead of retried.
+
+**Per-user preferences.** Each admin can mute realtime, Web Push, or new-entry
+notifications at `/admin/account`. An install or browser can stop receiving pushes
+by calling the matching `DELETE` endpoint.
+
+**Test and troubleshooting.** *Send test notification* fans a sample out over every
+enabled channel and reports how many targets succeeded. Delivery is
+fire-and-forget: a failing receiver never blocks or fails the entry creation that
+triggered it.
+
+When the matching stored value is blank, these environment variables are used:
+`NOTIFICATIONS_ENABLED`, `NOTIFICATIONS_REALTIME_ENABLED`,
+`NOTIFICATIONS_WEBPUSH_ENABLED`, `NOTIFICATIONS_ANDROID_ENABLED`,
+`NOTIFICATIONS_ENTRY_CREATED`, `NOTIFICATIONS_TITLE`, `NOTIFICATIONS_BODY`,
+`NOTIFICATIONS_CLICK_URL`, `NOTIFICATIONS_VAPID_SUBJECT`,
+`NOTIFICATIONS_VAPID_PUBLIC_KEY`, `NOTIFICATIONS_VAPID_PRIVATE_KEY`,
+`NOTIFICATIONS_FCM_PROJECT_ID`, `NOTIFICATIONS_FCM_CLIENT_EMAIL`,
+`NOTIFICATIONS_FCM_PRIVATE_KEY`, `NOTIFICATIONS_FIREBASE_API_KEY`,
+`NOTIFICATIONS_FIREBASE_APP_ID`, `NOTIFICATIONS_FIREBASE_SENDER_ID`.
 
 ### Export
 

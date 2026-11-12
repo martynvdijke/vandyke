@@ -36,8 +36,8 @@ func TestWebhookMigrationCreatesTablesAndIndexes(t *testing.T) {
 	if err := st.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if applied != 14 {
-		t.Fatalf("applied migrations = %d, want 14", applied)
+	if applied != 15 {
+		t.Fatalf("applied migrations = %d, want 15", applied)
 	}
 }
 

@@ -18,7 +18,9 @@ import (
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/media"
 	"vandyke.thor.edu/vandyke/internal/metrics"
+	"vandyke.thor.edu/vandyke/internal/notify"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
+	"vandyke.thor.edu/vandyke/internal/realtime"
 	"vandyke.thor.edu/vandyke/internal/settings"
 	"vandyke.thor.edu/vandyke/internal/store"
 	"vandyke.thor.edu/vandyke/internal/web"
@@ -58,7 +60,7 @@ func run() error {
 	}
 
 	limiter := ratelimit.New(cfg.AddRateLimitPerHour, cfg.AddRateLimitBurst)
-	settingsStore, err := settings.New(ctx, st, cfg.Umami, cfg.Webhook)
+	settingsStore, err := settings.New(ctx, st, cfg.Umami, cfg.Webhook, cfg.Notifications)
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
@@ -88,12 +90,17 @@ func run() error {
 	defer engine.Close()
 	registry.SetQueueDepth(engine.QueueDepth)
 
-	api := httpapi.New(st, limiter, cfg.TrustProxy, cfg.PublicBaseURL, engine, registry, cfg.MetricsToken, logger)
-	ui, err := web.New(st, limiter, settingsStore.Current, engine, cfg.TrustProxy, cfg.PublicBaseURL, registry, logger)
+	// One realtime hub and notifier are shared by the public UI and the JSON
+	// API, so an entry added through either surface reaches every subscriber.
+	hub := realtime.NewHub()
+	notifier := notify.New(st, settingsStore, hub, cfg.PublicBaseURL, logger)
+
+	api := httpapi.New(st, limiter, cfg.TrustProxy, cfg.PublicBaseURL, engine, notifier, registry, cfg.MetricsToken, logger)
+	ui, err := web.New(st, limiter, settingsStore.Current, engine, notifier, cfg.TrustProxy, cfg.PublicBaseURL, registry, logger)
 	if err != nil {
 		return err
 	}
-	adminUI, err := admin.New(ctx, st, settingsStore, cfg, engine, logger)
+	adminUI, err := admin.New(ctx, st, settingsStore, cfg, engine, notifier, logger)
 	if err != nil {
 		return fmt.Errorf("admin: %w", err)
 	}
@@ -159,7 +166,7 @@ func cspFor(u config.Umami) string {
 		connectSrc += " " + origin
 	}
 	return fmt.Sprintf(
-		"default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src %s; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+		"default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src %s; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 		scriptSrc, connectSrc,
 	)
 }

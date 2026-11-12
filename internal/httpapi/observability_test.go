@@ -28,7 +28,7 @@ func newObservabilityServer(t *testing.T, registry *metrics.Registry, token stri
 	engine := webhook.NewEngine(st, nil, "", nil, discardLogger())
 	t.Cleanup(engine.Close)
 	mux := http.NewServeMux()
-	New(st, ratelimit.New(1000, 100), false, "", engine, registry, token, discardLogger()).Register(mux)
+	New(st, ratelimit.New(1000, 100), false, "", engine, nil, registry, token, discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, st
@@ -91,7 +91,7 @@ func TestReadyzMissingMigration(t *testing.T) {
 	engine := webhook.NewEngine(st, nil, "", nil, discardLogger())
 	defer engine.Close()
 	mux := http.NewServeMux()
-	New(st, ratelimit.New(1000, 100), false, "", engine, nil, "", discardLogger()).Register(mux)
+	New(st, ratelimit.New(1000, 100), false, "", engine, nil, nil, "", discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -206,7 +206,7 @@ func TestAdditionOutcomeMetrics(t *testing.T) {
 	t.Cleanup(engine.Close)
 	mux := http.NewServeMux()
 	// A burst of five lets the first five POSTs through; the sixth is denied.
-	New(st, ratelimit.New(100, 5), false, "", engine, registry, "", discardLogger()).Register(mux)
+	New(st, ratelimit.New(100, 5), false, "", engine, nil, registry, "", discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 

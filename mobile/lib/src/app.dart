@@ -1,9 +1,13 @@
 import 'dart:async';
 
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'deep_links.dart';
+import 'notifications/notification_providers.dart';
+import 'notifications/push_service.dart';
+import 'providers.dart';
 import 'screens/home_shell.dart';
 import 'screens/setup_screen.dart';
 import 'server_controller.dart';
@@ -23,6 +27,14 @@ class _VandykeAppState extends ConsumerState<VandykeApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<Uri>? _linkSubscription;
 
+  /// The service whose notification streams are currently wired up.
+  PushService? _pushService;
+
+  /// A service currently being started, so two calls never attach twice.
+  PushService? _pushStarting;
+  StreamSubscription<RemoteMessage>? _foregroundSubscription;
+  StreamSubscription<RemoteMessage>? _openedSubscription;
+
   /// A cold-start link that arrived before the server address was loaded; it
   /// is routed as soon as the app reaches the ready state.
   Uri? _pendingLink;
@@ -33,6 +45,7 @@ class _VandykeAppState extends ConsumerState<VandykeApp> {
     final source = ref.read(entryLinkSourceProvider);
     _linkSubscription = source.links.listen(_handleLink);
     unawaited(_readInitialLink(source));
+    unawaited(_startPush());
   }
 
   Future<void> _readInitialLink(EntryLinkSource source) async {
@@ -50,7 +63,64 @@ class _VandykeAppState extends ConsumerState<VandykeApp> {
   @override
   void dispose() {
     _linkSubscription?.cancel();
+    _foregroundSubscription?.cancel();
+    _openedSubscription?.cancel();
     super.dispose();
+  }
+
+  /// Connects to the notification streams of the current push service.
+  ///
+  /// Firebase is only started when the device already had notifications on, so
+  /// an unconfigured server leaves the streams silent and never blocks startup.
+  Future<void> _startPush() async {
+    final service = ref.read(pushServiceProvider);
+    if (identical(service, _pushService) || identical(service, _pushStarting)) {
+      return;
+    }
+    _pushStarting = service;
+    await _foregroundSubscription?.cancel();
+    await _openedSubscription?.cancel();
+    await service.prepare();
+    if (!mounted) return;
+    if (identical(ref.read(pushServiceProvider), service)) {
+      _pushService = service;
+      _foregroundSubscription = service.foregroundMessages.listen(
+        _onForegroundMessage,
+      );
+      _openedSubscription = service.openedMessages.listen(_onNotificationTap);
+      final initial = await service.initialMessage();
+      if (initial != null && mounted) _onNotificationTap(initial);
+    }
+    if (identical(_pushStarting, service)) _pushStarting = null;
+    // The ledger address changed while Firebase was starting; wire up again.
+    if (!identical(ref.read(pushServiceProvider), service)) {
+      unawaited(_startPush());
+    }
+  }
+
+  /// A new entry was announced while the app is open.
+  void _onForegroundMessage(RemoteMessage message) {
+    _refreshLedger();
+  }
+
+  /// The user tapped a notification: refresh the ledger and open the entry it
+  /// names, or fall back to the ledger tab.
+  void _onNotificationTap(RemoteMessage message) {
+    _refreshLedger();
+    final server = ref.read(serverControllerProvider);
+    final uri = notificationEntryUri(message.data, server.serverUrl);
+    if (uri == null) {
+      if (server.status == ServerStatus.ready) {
+        ref.read(homeTabProvider.notifier).select(0);
+      }
+      return;
+    }
+    _handleLink(uri);
+  }
+
+  void _refreshLedger() {
+    if (ref.read(serverControllerProvider).status != ServerStatus.ready) return;
+    unawaited(ref.read(ledgerProvider.notifier).refresh());
   }
 
   void _handleLink(Uri uri) {
@@ -97,6 +167,9 @@ class _VandykeAppState extends ConsumerState<VandykeApp> {
     final mode = ref.watch(themeControllerProvider);
     ref.listen(serverControllerProvider, (previous, next) {
       if (next.status == ServerStatus.ready) _routePending();
+    });
+    ref.listen(pushServiceProvider, (previous, next) {
+      if (!identical(previous, next)) unawaited(_startPush());
     });
     return MaterialApp(
       title: 'The vanDyke Ledger',

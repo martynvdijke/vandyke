@@ -10,24 +10,38 @@ import (
 )
 
 type accountData struct {
-	Admin    store.Admin
-	Umami    config.Umami
-	CSRF     string
-	Error    string
-	Flash    string
-	HasLocal bool
+	Admin                  store.Admin
+	Umami                  config.Umami
+	CSRF                   string
+	Error                  string
+	Flash                  string
+	HasLocal               bool
+	Prefs                  store.AdminNotificationPrefs
+	NotificationsAvailable bool
 }
 
 func (a *Admin) accountPage(r *http.Request, errMsg string) accountData {
 	state := stateFrom(r)
 	flash, _ := a.flashMessage(r)
+	prefs, err := a.store.GetAdminNotificationPrefs(r.Context(), state.Admin.ID)
+	if err != nil {
+		a.logger.Error("load admin notification prefs", "admin_id", state.Admin.ID, "error", err)
+		prefs = store.AdminNotificationPrefs{
+			AdminID:      state.Admin.ID,
+			Realtime:     true,
+			WebPush:      true,
+			EntryCreated: true,
+		}
+	}
 	return accountData{
-		Admin:    state.Admin,
-		Umami:    a.settings.Current(),
-		CSRF:     state.Session.CSRFToken,
-		Error:    errMsg,
-		Flash:    flash,
-		HasLocal: state.Admin.HasPassword(),
+		Admin:                  state.Admin,
+		Umami:                  a.settings.Current(),
+		CSRF:                   state.Session.CSRFToken,
+		Error:                  errMsg,
+		Flash:                  flash,
+		HasLocal:               state.Admin.HasPassword(),
+		Prefs:                  prefs,
+		NotificationsAvailable: a.settings.CurrentNotifications().Enabled,
 	}
 }
 
@@ -74,4 +88,22 @@ func (a *Admin) handleAccountPassword(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(rw, r, "/admin/account?flash=password-changed", http.StatusSeeOther)
+}
+
+// handleAccountNotifications stores the signed-in administrator's own
+// notification toggles. The browser push opt-in is separate from the OS
+// permission prompt; this only controls whether this server sends to it.
+func (a *Admin) handleAccountNotifications(rw http.ResponseWriter, r *http.Request) {
+	state := stateFrom(r)
+	prefs := store.AdminNotificationPrefs{
+		AdminID:      state.Admin.ID,
+		Realtime:     r.FormValue("realtime_enabled") != "",
+		WebPush:      r.FormValue("web_push_enabled") != "",
+		EntryCreated: r.FormValue("entry_created") != "",
+	}
+	if err := a.store.SaveAdminNotificationPrefs(r.Context(), prefs); err != nil {
+		a.internalError(rw, err)
+		return
+	}
+	http.Redirect(rw, r, "/admin/account?flash=notifications-saved", http.StatusSeeOther)
 }

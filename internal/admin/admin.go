@@ -18,6 +18,7 @@ import (
 	"vandyke.thor.edu/vandyke/internal/auth"
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
+	"vandyke.thor.edu/vandyke/internal/notify"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/settings"
 	"vandyke.thor.edu/vandyke/internal/store"
@@ -48,6 +49,7 @@ type Admin struct {
 	oidc         *auth.OIDC
 	loginLimiter *ratelimit.Limiter
 	hooks        *webhook.Engine
+	notify       *notify.Notifier
 
 	// sweepMu guards lastSweep, which rate-limits the opportunistic expired
 	// session sweep performed by requireAuth.
@@ -63,7 +65,7 @@ type requestState struct {
 }
 
 // New prepares templates, the optional OIDC client and login limiter.
-func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.Config, hooks *webhook.Engine, logger *slog.Logger) (*Admin, error) {
+func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.Config, hooks *webhook.Engine, notifier *notify.Notifier, logger *slog.Logger) (*Admin, error) {
 	funcs := template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			if t.IsZero() {
@@ -100,6 +102,7 @@ func New(ctx context.Context, st *store.Store, stg *settings.Store, cfg config.C
 		tmpl:         tmpl,
 		loginLimiter: ratelimit.NewPerMinute(cfg.AdminLoginRatePerMinute, cfg.AdminLoginRateBurst),
 		hooks:        hooks,
+		notify:       notifier,
 	}
 	if cfg.OIDC.Enabled() {
 		a.oidc, err = auth.NewOIDC(ctx, auth.OIDCConfig{
@@ -137,6 +140,8 @@ func (a *Admin) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/settings", a.withCSRF(maxAdminFormBytes, a.handleSaveSettings))
 	mux.HandleFunc("POST /admin/search/rebuild", a.withCSRF(maxAdminFormBytes, a.handleSearchRebuild))
 	mux.HandleFunc("POST /admin/settings/webhook/test", a.withCSRF(maxAdminFormBytes, a.handleWebhookTestFire))
+	mux.HandleFunc("POST /admin/settings/notifications/test", a.withCSRF(maxAdminFormBytes, a.handleNotificationTest))
+	mux.HandleFunc("POST /admin/settings/notifications/vapid", a.withCSRF(maxAdminFormBytes, a.handleVAPIDGenerate))
 
 	mux.HandleFunc("GET /admin/webhooks", a.requireAuth(a.handleWebhooks))
 	mux.HandleFunc("POST /admin/webhooks", a.withCSRF(maxAdminFormBytes, a.handleWebhookCreate))
@@ -158,6 +163,7 @@ func (a *Admin) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /admin/account", a.requireAuth(a.handleAccount))
 	mux.HandleFunc("POST /admin/account/password", a.withCSRF(maxAdminFormBytes, a.handleAccountPassword))
+	mux.HandleFunc("POST /admin/account/notifications", a.withCSRF(maxAdminFormBytes, a.handleAccountNotifications))
 
 	mux.HandleFunc("GET /admin/sessions", a.requireAuth(a.handleSessions))
 	mux.HandleFunc("POST /admin/sessions/revoke", a.withCSRF(maxAdminFormBytes, a.handleSessionRevoke))
@@ -418,15 +424,16 @@ func (a *Admin) flashMessage(r *http.Request) (string, string) {
 // flashMessages maps fixed query keys to confirmation text so an arbitrary
 // query string can never inject a message.
 var flashMessages = map[string]string{
-	"admin-created":    "Admin created.",
-	"role-updated":     "Role updated.",
-	"admin-disabled":   "Admin disabled.",
-	"admin-enabled":    "Admin enabled.",
-	"admin-deleted":    "Admin deleted.",
-	"password-reset":   "Password reset and sessions revoked.",
-	"password-changed": "Password changed and other sessions revoked.",
-	"session-revoked":  "Session revoked.",
-	"sessions-revoked": "Other sessions revoked.",
+	"admin-created":       "Admin created.",
+	"role-updated":        "Role updated.",
+	"admin-disabled":      "Admin disabled.",
+	"admin-enabled":       "Admin enabled.",
+	"admin-deleted":       "Admin deleted.",
+	"password-reset":      "Password reset and sessions revoked.",
+	"password-changed":    "Password changed and other sessions revoked.",
+	"session-revoked":     "Session revoked.",
+	"sessions-revoked":    "Other sessions revoked.",
+	"notifications-saved": "Notification preferences saved.",
 }
 
 func plural(n int, one, many string) string {

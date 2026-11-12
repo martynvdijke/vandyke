@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../notifications/notification_providers.dart';
 import '../server_controller.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/common.dart';
@@ -25,6 +26,7 @@ class SettingsScreen extends ConsumerWidget {
     final scheme = theme.colorScheme;
     final server = ref.watch(serverControllerProvider);
     final mode = ref.watch(themeControllerProvider);
+    final notifications = ref.watch(notificationControllerProvider);
     return Scaffold(
       body: SafeArea(
         bottom: false,
@@ -126,6 +128,63 @@ class SettingsScreen extends ConsumerWidget {
                         .read(themeControllerProvider.notifier)
                         .set(selection.first),
                   ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Eyebrow('Notifications'),
+                  const SizedBox(height: 8),
+                  if (!notifications.available)
+                    Text(
+                      'Notifications are not configured on this server.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    )
+                  else ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Get an alert when someone adds a new entry.',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Switch(
+                          value: notifications.enabled,
+                          onChanged: notifications.busy
+                              ? null
+                              : (value) => ref
+                                    .read(
+                                      notificationControllerProvider.notifier,
+                                    )
+                                    .setEnabled(value),
+                        ),
+                      ],
+                    ),
+                    if (notifications.error.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        notifications.error,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.error,
+                        ),
+                      ),
+                    ],
+                  ],
                 ],
               ),
             ),

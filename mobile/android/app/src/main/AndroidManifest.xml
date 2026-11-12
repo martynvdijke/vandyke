@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Android 13 and newer ask the user before an app may post a
+         notification; the prompt is raised when notifications are enabled. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Photo evidence: the camera is requested at runtime before capture;
          the gallery needs no permission on modern Android. -->
     <uses-permission android:name="android.permission.CAMERA"/>
@@ -59,6 +62,11 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Tray notifications use the launcher mark. No default channel id is
+             set: FCM's fallback channel is enough. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

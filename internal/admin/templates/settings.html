@@ -92,6 +92,147 @@
   </div>
 </section>
 
+<section class="admin-card admin-settings-card" id="notifications">
+  <h2>Notifications</h2>
+  <p class="admin-lede">Realtime (in-app), browser Web Push, and Android push for new entries.</p>
+  <div class="admin-status">
+    {{if .NotifyActive}}<span class="admin-dot is-on" aria-hidden="true"></span> Notifications are active{{else}}<span class="admin-dot is-off" aria-hidden="true"></span> Notifications are disabled{{end}}
+  </div>
+
+  <form method="post" action="/admin/settings" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="settings_form" value="notifications">
+
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_enabled" value="1" {{if .Notifications.Enabled}}checked{{end}}>
+      <span>Enable notifications</span>
+    </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_realtime" value="1" {{if .Notifications.Realtime}}checked{{end}}>
+      <span>Realtime (in-app) updates</span>
+    </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_webpush" value="1" {{if .Notifications.WebPush}}checked{{end}}>
+      <span>Browser Web Push</span>
+    </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_android" value="1" {{if .Notifications.Android}}checked{{end}}>
+      <span>Android push</span>
+    </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_entry_created" value="1" {{if .Notifications.EntryCreated}}checked{{end}}>
+      <span>Send on new entries</span>
+    </label>
+
+    <label class="field">
+      <span class="field-label">Title template</span>
+      <input type="text" name="notifications_title" value="{{.Notifications.TitleTemplate}}" placeholder="{{.NotificationsEnv.TitleTemplate}}" autocomplete="off">
+      <span class="field-hint">Placeholders: <code>{word}</code> <code>{meaning}</code> <code>{person}</code> <code>{id}</code> <code>{base}</code>.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Body template</span>
+      <input type="text" name="notifications_body" value="{{.Notifications.BodyTemplate}}" placeholder="{{.NotificationsEnv.BodyTemplate}}" autocomplete="off">
+      <span class="field-hint">Placeholders: <code>{word}</code> <code>{meaning}</code> <code>{person}</code> <code>{id}</code> <code>{base}</code>.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Click URL</span>
+      <input type="text" name="notifications_click_url" value="{{.Notifications.ClickURL}}" placeholder="{{.NotificationsEnv.ClickURL}}" autocomplete="off">
+      <span class="field-hint">Must contain <code>{id}</code>. Use <code>{base}/e/{id}</code> or a path beginning with <code>/</code>.</span>
+    </label>
+
+    <label class="field">
+      <span class="field-label">VAPID subject</span>
+      <input type="text" name="notifications_vapid_subject" value="{{.Notifications.VAPIDSubject}}" placeholder="{{.NotificationsEnv.VAPIDSubject}}" autocomplete="off">
+      <span class="field-hint">A <code>mailto:</code> or <code>https:</code> contact for Web Push.</span>
+    </label>
+    <label class="field">
+      <span class="field-label">VAPID public key</span>
+      <input type="text" name="notifications_vapid_public_key" value="{{.Notifications.VAPIDPublicKey}}" placeholder="{{.NotificationsEnv.VAPIDPublicKey}}" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">VAPID private key <span class="field-optional">write-only</span></span>
+      <input type="password" name="notifications_vapid_private_key" value="" autocomplete="new-password" placeholder="Stored — leave blank to keep">
+      <span class="field-hint">{{if .VAPIDPrivateSet}}A private key is configured. Leave blank to keep it. {{end}}Generate a fresh pair only if you intend to invalidate existing browser subscriptions.</span>
+    </label>
+    {{if .VAPIDPrivateSet}}
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_vapid_clear_private" value="1">
+      <span>Clear the stored VAPID private key</span>
+    </label>
+    {{end}}
+
+    <label class="field">
+      <span class="field-label">FCM project ID</span>
+      <input type="text" name="notifications_fcm_project_id" value="{{.Notifications.FCMProjectID}}" placeholder="{{.NotificationsEnv.FCMProjectID}}" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">FCM client email</span>
+      <input type="email" name="notifications_fcm_client_email" value="{{.Notifications.FCMClientEmail}}" placeholder="{{.NotificationsEnv.FCMClientEmail}}" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">FCM private key <span class="field-optional">write-only</span></span>
+      <textarea name="notifications_fcm_private_key" rows="4" autocomplete="off" placeholder="Stored — leave blank to keep"></textarea>
+      <span class="field-hint">{{if .FCMPrivateSet}}A private key is configured. Leave blank to keep it. {{end}}Paste the service-account PEM key. It is never rendered back.</span>
+    </label>
+    {{if .FCMPrivateSet}}
+    <label class="filter-toggle">
+      <input type="checkbox" name="notifications_fcm_clear_private" value="1">
+      <span>Clear the stored FCM private key</span>
+    </label>
+    {{end}}
+
+    <label class="field">
+      <span class="field-label">Firebase API key</span>
+      <input type="text" name="notifications_firebase_api_key" value="{{.Notifications.FirebaseAPIKey}}" placeholder="{{.NotificationsEnv.FirebaseAPIKey}}" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">Firebase app ID</span>
+      <input type="text" name="notifications_firebase_app_id" value="{{.Notifications.FirebaseAppID}}" placeholder="{{.NotificationsEnv.FirebaseAppID}}" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">Firebase messaging sender ID</span>
+      <input type="text" name="notifications_firebase_sender_id" value="{{.Notifications.FirebaseSenderID}}" placeholder="{{.NotificationsEnv.FirebaseSenderID}}" autocomplete="off">
+      <span class="field-hint">Served to the Android app at runtime, so no <code>google-services.json</code> is needed.</span>
+    </label>
+
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Save notifications</button>
+    </div>
+  </form>
+
+  <form method="post" action="/admin/settings/notifications/vapid" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-form-actions">
+      <button class="btn btn-ghost" type="submit">Generate VAPID keys</button>
+    </div>
+    <span class="field-hint">Overwrites the current key pair. Existing browser subscriptions will need to resubscribe.</span>
+  </form>
+
+  <form method="post" action="/admin/settings/notifications/test" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="admin-form-actions">
+      <button class="btn btn-ghost" type="submit">Send test notification</button>
+    </div>
+  </form>
+  {{if .NotifyResult}}<p class="admin-flash" role="status">{{.NotifyResult}}</p>{{end}}
+
+  <div class="admin-env-note">
+    <h2>Environment fallback</h2>
+    <dl>
+      <div><dt>NOTIFICATIONS_TITLE</dt><dd>{{if .NotificationsEnv.TitleTemplate}}{{.NotificationsEnv.TitleTemplate}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_BODY</dt><dd>{{if .NotificationsEnv.BodyTemplate}}{{.NotificationsEnv.BodyTemplate}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_CLICK_URL</dt><dd>{{if .NotificationsEnv.ClickURL}}{{.NotificationsEnv.ClickURL}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_VAPID_SUBJECT</dt><dd>{{if .NotificationsEnv.VAPIDSubject}}{{.NotificationsEnv.VAPIDSubject}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_VAPID_PUBLIC_KEY</dt><dd>{{if .NotificationsEnv.VAPIDPublicKey}}{{.NotificationsEnv.VAPIDPublicKey}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_FCM_PROJECT_ID</dt><dd>{{if .NotificationsEnv.FCMProjectID}}{{.NotificationsEnv.FCMProjectID}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_FCM_CLIENT_EMAIL</dt><dd>{{if .NotificationsEnv.FCMClientEmail}}{{.NotificationsEnv.FCMClientEmail}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_FIREBASE_API_KEY</dt><dd>{{if .NotificationsEnv.FirebaseAPIKey}}{{.NotificationsEnv.FirebaseAPIKey}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_FIREBASE_APP_ID</dt><dd>{{if .NotificationsEnv.FirebaseAppID}}{{.NotificationsEnv.FirebaseAppID}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+      <div><dt>NOTIFICATIONS_FIREBASE_SENDER_ID</dt><dd>{{if .NotificationsEnv.FirebaseSenderID}}{{.NotificationsEnv.FirebaseSenderID}}{{else}}<span class="admin-muted">not set</span>{{end}}</dd></div>
+    </dl>
+  </div>
+</section>
+
 <section class="admin-card admin-settings-card">
   <h2>Search index</h2>
   <p class="admin-lede">The trigram search index is derived from the ledger and normally stays in step on every add, edit, delete and restore. Rebuild it if a search result looks stale; trashed entries stay excluded.</p>

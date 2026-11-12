@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
+import '../notifications/push_config.dart';
 import 'api_exception.dart';
 import 'models.dart';
 
@@ -172,6 +173,44 @@ class ApiClient {
   Future<Entry> entryById(int id) async {
     final decoded = await _send('GET', '/entries/$id', route: '/entries/{id}');
     return Entry.fromJson(decoded);
+  }
+
+  /// The Firebase client configuration for this server. Servers without push
+  /// answer with `enabled: false`, which is not an error.
+  Future<PushConfig> pushConfig() async {
+    final decoded = await _send('GET', '/push/config', route: '/push/config');
+    return PushConfig.fromJson(decoded);
+  }
+
+  /// Registers (or refreshes) this device's push token. The server answers
+  /// `201 {"id": ...}`; this device only needs the token to stay current.
+  Future<void> registerDevice({
+    required String token,
+    required String platform,
+    required String deviceName,
+    required String appVersion,
+  }) async {
+    await _send(
+      'POST',
+      '/push/devices',
+      body: {
+        'token': token,
+        'platform': platform,
+        'device_name': deviceName,
+        'app_version': appVersion,
+      },
+      route: '/push/devices',
+    );
+  }
+
+  /// Forgets a push token, so the device stops receiving alerts.
+  Future<void> unregisterDevice(String token) async {
+    await _send(
+      'DELETE',
+      '/push/devices',
+      body: {'token': token},
+      route: '/push/devices',
+    );
   }
 
   Future<Map<String, dynamic>> _send(

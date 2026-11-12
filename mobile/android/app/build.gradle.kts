@@ -28,7 +28,9 @@ android {
 
     defaultConfig {
         applicationId = "xyz.vandijke.vandyke"
-        minSdk = flutter.minSdkVersion
+        // firebase_messaging needs API 23; the Flutter default is already
+        // higher, and this keeps that floor explicit.
+        minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. ABI splits add 1000 * ABI_VERSION
         // automatically by Flutter unless -P force-version-code-ignoring-abi=true.

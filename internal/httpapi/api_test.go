@@ -50,7 +50,7 @@ func newTestAPI(t *testing.T, limiter *ratelimit.Limiter) (*httptest.Server, *st
 	t.Cleanup(func() { _ = st.Close() })
 
 	mux := http.NewServeMux()
-	New(st, limiter, false, "", testEngine(t, st, config.Webhook{}), nil, "", discardLogger()).Register(mux)
+	New(st, limiter, false, "", testEngine(t, st, config.Webhook{}), nil, nil, "", discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, st
@@ -501,7 +501,7 @@ func TestSecurityHeadersAppliedByMiddleware(t *testing.T) {
 	defer st.Close()
 
 	mux := http.NewServeMux()
-	New(st, ratelimit.New(1000, 100), false, "", testEngine(t, st, config.Webhook{}), nil, "", discardLogger()).Register(mux)
+	New(st, ratelimit.New(1000, 100), false, "", testEngine(t, st, config.Webhook{}), nil, nil, "", discardLogger()).Register(mux)
 	handler := httpx.SecurityHeaders("default-src 'self'")(mux)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -781,7 +781,7 @@ func TestCreateEntryDispatchesWebhook(t *testing.T) {
 
 	mux := http.NewServeMux()
 	New(st, ratelimit.New(1000, 100), false, "https://ledger.example",
-		testEngine(t, st, config.Webhook{URL: receiver.URL, Secret: "apisecret"}), nil, "",
+		testEngine(t, st, config.Webhook{URL: receiver.URL, Secret: "apisecret"}), nil, nil, "",
 		discardLogger()).Register(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

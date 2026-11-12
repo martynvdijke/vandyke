@@ -45,7 +45,7 @@ func newTestWebWithStore(t *testing.T, umami config.Umami, limiter *ratelimit.Li
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	w, err := New(st, limiter, func() config.Umami { return umami }, testEngine(t, st, config.Webhook{}), false, "", nil, discardLogger())
+	w, err := New(st, limiter, func() config.Umami { return umami }, testEngine(t, st, config.Webhook{}), nil, false, "", nil, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -741,7 +741,7 @@ func newTestWebWithBaseURL(t *testing.T, baseURL string) (*httptest.Server, *sto
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, testEngine(t, st, config.Webhook{}), false, baseURL, nil, discardLogger())
+	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, testEngine(t, st, config.Webhook{}), nil, false, baseURL, nil, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -982,7 +982,7 @@ func TestDiscoverabilityRoutesCarrySecurityHeaders(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, testEngine(t, st, config.Webhook{}), false, "", nil, discardLogger())
+	w, err := New(st, ratelimit.New(1000, 100), func() config.Umami { return config.Umami{} }, testEngine(t, st, config.Webhook{}), nil, false, "", nil, discardLogger())
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -1132,7 +1132,7 @@ func TestWebhookDispatchDoesNotBlockCreate(t *testing.T) {
 	w, err := New(st, ratelimit.New(1000, 100),
 		func() config.Umami { return config.Umami{} },
 		testEngine(t, st, config.Webhook{URL: receiver.URL, Secret: "s3cret"}),
-		false, "", nil, discardLogger())
+		nil, false, "", nil, discardLogger())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1243,7 +1243,7 @@ func TestWebhookFailureDoesNotAffectCreate(t *testing.T) {
 	w, err := New(st, ratelimit.New(1000, 100),
 		func() config.Umami { return config.Umami{} },
 		testEngineWithLogger(t, st, config.Webhook{URL: receiver.URL}, slog.New(logs)),
-		false, "", nil, slog.New(logs))
+		nil, false, "", nil, slog.New(logs))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

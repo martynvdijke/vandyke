@@ -8,15 +8,24 @@ import 'ledger_screen.dart';
 import 'settings_screen.dart';
 import 'stats_screen.dart';
 
-class HomeShell extends ConsumerStatefulWidget {
-  const HomeShell({super.key});
+/// The tab HomeShell shows. Kept outside the widget so a notification tap can
+/// bring the ledger forward.
+final homeTabProvider = NotifierProvider<HomeTabController, int>(
+  HomeTabController.new,
+);
 
+class HomeTabController extends Notifier<int> {
   @override
-  ConsumerState<HomeShell> createState() => _HomeShellState();
+  int build() => 0;
+
+  void select(int index) {
+    if (index < 0 || index > 2 || index == state) return;
+    state = index;
+  }
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
-  int _index = 0;
+class HomeShell extends ConsumerWidget {
+  const HomeShell({super.key});
 
   static const _screens = <Widget>[
     LedgerScreen(),
@@ -24,23 +33,24 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     SettingsScreen(),
   ];
 
-  Future<void> _openLogSheet() async {
+  Future<void> _openLogSheet(BuildContext context, WidgetRef ref) async {
     final entry = await showLogMisspellingSheet(context);
-    if (entry == null || !mounted) return;
+    if (entry == null || !context.mounted) return;
     await ref.read(ledgerProvider.notifier).acceptCreated(entry);
-    if (mounted) {
+    if (context.mounted) {
       showVandykeSnack(context, '“${entry.word}” added to the ledger.');
     }
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final index = ref.watch(homeTabProvider);
     return Scaffold(
-      body: IndexedStack(index: _index, children: _screens),
-      floatingActionButton: _index == 0
+      body: IndexedStack(index: index, children: _screens),
+      floatingActionButton: index == 0
           ? FloatingActionButton.extended(
-              onPressed: _openLogSheet,
+              onPressed: () => _openLogSheet(context, ref),
               backgroundColor: scheme.primary,
               foregroundColor: scheme.onPrimary,
               icon: const Icon(Icons.edit_note_outlined),
@@ -48,8 +58,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             )
           : null,
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (index) => setState(() => _index = index),
+        selectedIndex: index,
+        onDestinationSelected: ref.read(homeTabProvider.notifier).select,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.menu_book_outlined),

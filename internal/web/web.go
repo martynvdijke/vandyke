@@ -22,6 +22,7 @@ import (
 	"vandyke.thor.edu/vandyke/internal/config"
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/metrics"
+	"vandyke.thor.edu/vandyke/internal/notify"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/searchquery"
 	"vandyke.thor.edu/vandyke/internal/slip"
@@ -44,6 +45,7 @@ type Web struct {
 	publicBaseURL string
 	umami         func() config.Umami
 	hooks         *webhook.Engine
+	notify        *notify.Notifier
 	metrics       *metrics.Registry
 	slip          *slip.Resolver
 	logger        *slog.Logger
@@ -52,7 +54,7 @@ type Web struct {
 }
 
 // New parses templates and prepares the static asset handler.
-func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, hooks *webhook.Engine, trustProxy bool, publicBaseURL string, registry *metrics.Registry, logger *slog.Logger) (*Web, error) {
+func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami, hooks *webhook.Engine, notifier *notify.Notifier, trustProxy bool, publicBaseURL string, registry *metrics.Registry, logger *slog.Logger) (*Web, error) {
 	tmpl, err := template.New("vandyke").Funcs(template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			if t.IsZero() {
@@ -86,6 +88,7 @@ func New(st *store.Store, limiter *ratelimit.Limiter, umami func() config.Umami,
 		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
 		umami:         umami,
 		hooks:         hooks,
+		notify:        notifier,
 		metrics:       registry,
 		slip:          slip.New(st),
 		logger:        logger,
@@ -113,6 +116,7 @@ func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /robots.txt", w.handleRobots)
 	mux.HandleFunc("GET /sitemap.xml", w.handleSitemap)
 	mux.HandleFunc("GET /site.webmanifest", w.handleManifest)
+	mux.HandleFunc("GET /sw.js", w.handleServiceWorker)
 	mux.HandleFunc("GET /opensearch.xml", w.handleOpenSearch)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheable(w.assets)))
 }
@@ -602,6 +606,21 @@ type webManifest struct {
 	Icons           []manifestIcon `json:"icons"`
 }
 
+// handleServiceWorker serves the notification worker from the origin root so
+// its scope can cover every page. It lives in static/ but /static/sw.js would
+// only control /static/.
+func (w *Web) handleServiceWorker(rw http.ResponseWriter, r *http.Request) {
+	body, err := fs.ReadFile(staticFS, "static/sw.js")
+	if err != nil {
+		http.NotFound(rw, r)
+		return
+	}
+	rw.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	rw.Header().Set("Service-Worker-Allowed", "/")
+	rw.Header().Set("Cache-Control", "no-cache")
+	_, _ = rw.Write(body)
+}
+
 // handleManifest serves the web app manifest using the existing icon assets.
 func (w *Web) handleManifest(rw http.ResponseWriter, r *http.Request) {
 	manifest := webManifest{
@@ -728,6 +747,9 @@ func (w *Web) handleCreate(rw http.ResponseWriter, r *http.Request) {
 		Entry:   entry,
 		BaseURL: httpx.BaseURL(r, w.publicBaseURL, w.trustProxy),
 	})
+	if w.notify != nil {
+		w.notify.EntryCreated(r.Context(), entry, httpx.BaseURL(r, w.publicBaseURL, w.trustProxy))
+	}
 
 	if !isHTMX {
 		http.Redirect(rw, r, "/?added=1", http.StatusSeeOther)

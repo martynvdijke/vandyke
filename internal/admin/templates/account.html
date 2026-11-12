@@ -41,4 +41,27 @@
   <p class="admin-muted">This account signs in through the identity provider, so it has no local password.</p>
   {{end}}
 </section>
+<section class="admin-card">
+  <h2>Notifications</h2>
+  <p class="admin-lede">Choose what this account receives. Browser push also needs the site permission and the notifications button; Android is controlled in the app.</p>
+  <form method="post" action="/admin/account/notifications" class="admin-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="filter-toggle">
+      <input type="checkbox" name="realtime_enabled" value="1" {{if .Prefs.Realtime}}checked{{end}}>
+      <span>Realtime in this browser</span>
+    </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="web_push_enabled" value="1" {{if .Prefs.WebPush}}checked{{end}}>
+      <span>Browser push</span>
+    </label>
+    <label class="filter-toggle">
+      <input type="checkbox" name="entry_created" value="1" {{if .Prefs.EntryCreated}}checked{{end}}>
+      <span>New entries</span>
+    </label>
+    <div class="admin-form-actions">
+      <button class="btn btn-primary" type="submit">Save notification preferences</button>
+    </div>
+  </form>
+  {{if not .NotificationsAvailable}}<p class="admin-muted">Notifications are currently disabled by the administrator.</p>{{end}}
+</section>
 {{template "admin-foot" .}}{{end}}

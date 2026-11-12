@@ -53,6 +53,27 @@ func (u Umami) Origin() string {
 	return parsed.Scheme + "://" + parsed.Host
 }
 
+// Notifications holds runtime-configurable push/realtime notification settings.
+type Notifications struct {
+	Enabled          bool
+	Realtime         bool
+	WebPush          bool
+	Android          bool
+	EntryCreated     bool
+	TitleTemplate    string
+	BodyTemplate     string
+	ClickURL         string
+	VAPIDSubject     string
+	VAPIDPublicKey   string
+	VAPIDPrivateKey  string
+	FCMProjectID     string
+	FCMClientEmail   string
+	FCMPrivateKey    string
+	FirebaseAPIKey   string
+	FirebaseAppID    string
+	FirebaseSenderID string
+}
+
 // Config is the fully resolved application configuration.
 type Config struct {
 	Port                    string
@@ -68,6 +89,7 @@ type Config struct {
 	Umami                   Umami
 	Webhook                 Webhook
 	OIDC                    OIDC
+	Notifications           Notifications
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -110,6 +132,36 @@ func Load() (Config, error) {
 	if cfg.AdminLoginRateBurst, err = getenvInt("ADMIN_LOGIN_RATE_BURST", 5); err != nil {
 		return Config{}, err
 	}
+	if cfg.Notifications.Enabled, err = getenvBool("NOTIFICATIONS_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.Notifications.Realtime, err = getenvBool("NOTIFICATIONS_REALTIME_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.Notifications.WebPush, err = getenvBool("NOTIFICATIONS_WEBPUSH_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.Notifications.Android, err = getenvBool("NOTIFICATIONS_ANDROID_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.Notifications.EntryCreated, err = getenvBool("NOTIFICATIONS_ENTRY_CREATED", true); err != nil {
+		return Config{}, err
+	}
+	cfg.Notifications.TitleTemplate = strings.TrimSpace(getenv("NOTIFICATIONS_TITLE", "New entry added"))
+	cfg.Notifications.BodyTemplate = strings.TrimSpace(getenv("NOTIFICATIONS_BODY", `{person} added “{word}” — {meaning}`))
+	cfg.Notifications.ClickURL = strings.TrimSpace(getenv("NOTIFICATIONS_CLICK_URL", `{base}/e/{id}`))
+	cfg.Notifications.VAPIDSubject = strings.TrimSpace(getenv("NOTIFICATIONS_VAPID_SUBJECT", ""))
+	cfg.Notifications.VAPIDPublicKey = strings.TrimSpace(getenv("NOTIFICATIONS_VAPID_PUBLIC_KEY", ""))
+	cfg.Notifications.VAPIDPrivateKey = strings.TrimSpace(getenv("NOTIFICATIONS_VAPID_PRIVATE_KEY", ""))
+	cfg.Notifications.FCMProjectID = strings.TrimSpace(getenv("NOTIFICATIONS_FCM_PROJECT_ID", ""))
+	cfg.Notifications.FCMClientEmail = strings.TrimSpace(getenv("NOTIFICATIONS_FCM_CLIENT_EMAIL", ""))
+	// Private keys are often pasted from a JSON service account, where newlines
+	// arrive escaped; turn them back into real newlines.
+	cfg.Notifications.FCMPrivateKey = strings.ReplaceAll(
+		strings.TrimSpace(getenv("NOTIFICATIONS_FCM_PRIVATE_KEY", "")), `\n`, "\n")
+	cfg.Notifications.FirebaseAPIKey = strings.TrimSpace(getenv("NOTIFICATIONS_FIREBASE_API_KEY", ""))
+	cfg.Notifications.FirebaseAppID = strings.TrimSpace(getenv("NOTIFICATIONS_FIREBASE_APP_ID", ""))
+	cfg.Notifications.FirebaseSenderID = strings.TrimSpace(getenv("NOTIFICATIONS_FIREBASE_SENDER_ID", ""))
 	if raw := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); raw != "" {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" ||

@@ -2071,7 +2071,8 @@ button {
 @media (max-width: 560px) {
   .masthead-inner,
   .page,
-  .footer-inner {
+  .footer-inner,
+  .notify-strip-inner {
     padding-left: 1.1rem;
     padding-right: 1.1rem;
   }
@@ -2690,4 +2691,109 @@ a.tag-chip:focus-visible {
   .gallery-grid {
     grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
   }
+}
+
+/* ---------- notifications ---------- */
+/* Quiet strip above the footer plus the account-page card. Both stay hidden
+   until notifications.js knows server and browser can carry a subscription. */
+.notify-strip {
+  border-top: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--paper-deep) 45%, transparent);
+}
+
+.notify-toggle[hidden] {
+  display: none;
+}
+
+.notify-strip-inner {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 0.5rem 1.5rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.notify-strip-text {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: auto;
+  font-size: 0.82rem;
+  color: var(--ink-mute);
+}
+
+.notify-bell,
+.notify-icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.notify-bell {
+  color: var(--accent);
+}
+
+.notify-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.75rem; /* 44px touch target */
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 620;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.notify-toggle:hover:not([aria-busy="true"]) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.notify-toggle[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--rule-strong));
+  background: color-mix(in srgb, var(--teal) 10%, var(--card));
+  color: var(--teal);
+}
+
+.notify-toggle[aria-busy="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.notify-icon-on,
+.notify-toggle[aria-pressed="true"] .notify-icon-off {
+  display: none;
+}
+
+.notify-toggle[aria-pressed="true"] .notify-icon-on {
+  display: block;
+}
+
+.notify-hint {
+  font-size: 0.82rem;
+  color: var(--ink-mute);
+}
+
+.notify-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.notify-state {
+  margin-top: 0.9rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--rule);
+  font-size: 0.8rem;
+  color: var(--ink-mute);
 }

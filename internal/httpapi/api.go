@@ -15,6 +15,7 @@ import (
 
 	"vandyke.thor.edu/vandyke/internal/httpx"
 	"vandyke.thor.edu/vandyke/internal/metrics"
+	"vandyke.thor.edu/vandyke/internal/notify"
 	"vandyke.thor.edu/vandyke/internal/ratelimit"
 	"vandyke.thor.edu/vandyke/internal/slip"
 	"vandyke.thor.edu/vandyke/internal/store"
@@ -34,6 +35,7 @@ type API struct {
 	trustProxy    bool
 	publicBaseURL string
 	hooks         *webhook.Engine
+	notify        *notify.Notifier
 	metrics       *metrics.Registry
 	metricsToken  string
 	slip          *slip.Resolver
@@ -43,13 +45,14 @@ type API struct {
 // New creates the API. hooks is the process-wide delivery engine and registry
 // the metrics registry; both may be shared with the web and admin servers.
 func New(st *store.Store, limiter *ratelimit.Limiter, trustProxy bool, publicBaseURL string,
-	hooks *webhook.Engine, registry *metrics.Registry, metricsToken string, logger *slog.Logger) *API {
+	hooks *webhook.Engine, notifier *notify.Notifier, registry *metrics.Registry, metricsToken string, logger *slog.Logger) *API {
 	return &API{
 		store:         st,
 		limiter:       limiter,
 		trustProxy:    trustProxy,
 		publicBaseURL: publicBaseURL,
 		hooks:         hooks,
+		notify:        notifier,
 		metrics:       registry,
 		metricsToken:  metricsToken,
 		slip:          slip.New(st),
@@ -70,6 +73,13 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/slip", a.handleSlip)
 	mux.HandleFunc("GET /api/v1/stats", a.handleStats)
 	mux.HandleFunc("GET /api/v1/persons", a.handlePersons)
+
+	mux.HandleFunc("GET /api/v1/push/config", a.handlePushConfig)
+	mux.HandleFunc("GET /api/v1/events", a.handleEvents)
+	mux.HandleFunc("POST /api/v1/push/devices", a.rateLimited(a.handleUpsertPushDevice))
+	mux.HandleFunc("DELETE /api/v1/push/devices", a.handleDeletePushDevice)
+	mux.HandleFunc("POST /api/v1/push/subscriptions", a.rateLimited(a.handleUpsertWebPushSubscription))
+	mux.HandleFunc("DELETE /api/v1/push/subscriptions", a.handleDeleteWebPushSubscription)
 }
 
 func (a *API) handleHealth(rw http.ResponseWriter, _ *http.Request) {
@@ -283,6 +293,9 @@ func (a *API) writeCreatedEntry(rw http.ResponseWriter, r *http.Request, word, m
 	// Fire-and-forget: emission returns before any receiver is contacted.
 	base := httpx.BaseURL(r, a.publicBaseURL, a.trustProxy)
 	a.hooks.Emit(webhook.Change{Event: webhook.EventEntryCreated, Entry: entry, BaseURL: base})
+	if a.notify != nil {
+		a.notify.EntryCreated(r.Context(), entry, base)
+	}
 	httpx.WriteJSON(rw, http.StatusCreated, entry)
 }
 

@@ -45,7 +45,7 @@ func newAdminTestServerWithEngine(t *testing.T, cfg config.Config) (*httptest.Se
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	stg, err := settings.New(t.Context(), st, cfg.Umami, cfg.Webhook)
+	stg, err := settings.New(t.Context(), st, cfg.Umami, cfg.Webhook, cfg.Notifications)
 	if err != nil {
 		t.Fatalf("settings.New: %v", err)
 	}
@@ -53,11 +53,11 @@ func newAdminTestServerWithEngine(t *testing.T, cfg config.Config) (*httptest.Se
 	engine := webhook.NewEngine(st, stg.CurrentWebhook, "", nil, logger)
 	engine.Start()
 	t.Cleanup(engine.Close)
-	a, err := New(t.Context(), st, stg, cfg, engine, logger)
+	a, err := New(t.Context(), st, stg, cfg, engine, nil, logger)
 	if err != nil {
 		t.Fatalf("admin.New: %v", err)
 	}
-	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, engine, false, "", nil, logger)
+	w, err := web.New(st, ratelimit.New(1000, 100), stg.Current, engine, nil, false, "", nil, logger)
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
@@ -798,5 +798,174 @@ func TestAdminWebhookSettingsAndTestFire(t *testing.T) {
 	}
 	if !strings.Contains(cleared, failing.URL) {
 		t.Fatal("clearing the secret removed the URL")
+	}
+}
+
+func TestAdminNotificationSettingsSave(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	resp := postForm(t, client, srv.URL+"/admin/settings", url.Values{
+		"csrf":                           {csrf},
+		"settings_form":                  {"notifications"},
+		"notifications_enabled":          {"1"},
+		"notifications_realtime":         {"1"},
+		"notifications_webpush":          {"1"},
+		"notifications_entry_created":    {"1"},
+		"notifications_title":            {"{person}: {word}"},
+		"notifications_body":             {"{meaning} (#{id})"},
+		"notifications_click_url":        {"/e/{id}"},
+		"notifications_vapid_subject":    {"mailto:ops@example.com"},
+		"notifications_vapid_public_key": {"test-public-key"},
+		"notifications_fcm_project_id":   {"project-1"},
+		"notifications_firebase_api_key": {"firebase-key"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save notifications = %d, want 303", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != "/admin/settings?saved=1#notifications" {
+		t.Fatalf("Location = %q", got)
+	}
+
+	values, err := st.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if values["notifications.enabled"] != "1" || values["notifications.entry_created"] != "1" {
+		t.Fatalf("notification flags = %q/%q", values["notifications.enabled"], values["notifications.entry_created"])
+	}
+	if values["notifications.title"] != "{person}: {word}" {
+		t.Fatalf("stored title = %q", values["notifications.title"])
+	}
+	if values["notifications.vapid.public_key"] != "test-public-key" {
+		t.Fatalf("stored VAPID public key = %q", values["notifications.vapid.public_key"])
+	}
+
+	_, page := get(t, client, srv.URL+"/admin/settings")
+	if !strings.Contains(page, `value="{person}: {word}"`) {
+		t.Fatal("settings page does not show the saved title template")
+	}
+	if !strings.Contains(page, `name="notifications_enabled" value="1" checked`) {
+		t.Fatal("settings page does not show the master toggle as checked")
+	}
+}
+
+func TestAdminNotificationSettingsInvalidClickURL(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	status, body := postFormRead(t, client, srv.URL+"/admin/settings", url.Values{
+		"csrf":                    {csrf},
+		"settings_form":           {"notifications"},
+		"notifications_title":     {"Never persisted"},
+		"notifications_click_url": {"not-a-url"},
+	})
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid click URL status = %d, want 422", status)
+	}
+	if !strings.Contains(body, "must contain") {
+		t.Fatalf("invalid click URL body lacks the validation error: %.300s", body)
+	}
+
+	values, err := st.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if values["notifications.title"] != "" {
+		t.Fatalf("invalid save persisted title %q", values["notifications.title"])
+	}
+	if values["notifications.click_url"] != "" {
+		t.Fatalf("invalid save persisted click URL %q", values["notifications.click_url"])
+	}
+}
+
+func TestAdminAccountNotificationPrefsRoundTrip(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	admin, err := st.GetAdminByUsername(t.Context(), "owner")
+	if err != nil {
+		t.Fatalf("GetAdminByUsername: %v", err)
+	}
+
+	resp := postForm(t, client, srv.URL+"/admin/account/notifications", url.Values{
+		"csrf":          {csrf},
+		"entry_created": {"1"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save prefs = %d, want 303", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != "/admin/account?flash=notifications-saved" {
+		t.Fatalf("Location = %q", got)
+	}
+
+	prefs, err := st.GetAdminNotificationPrefs(t.Context(), admin.ID)
+	if err != nil {
+		t.Fatalf("GetAdminNotificationPrefs: %v", err)
+	}
+	if prefs.Realtime || prefs.WebPush || !prefs.EntryCreated {
+		t.Fatalf("prefs after first save = %+v", prefs)
+	}
+
+	_, body := get(t, client, srv.URL+"/admin/account?flash=notifications-saved")
+	if !strings.Contains(body, "Notification preferences saved.") {
+		t.Fatal("account page does not confirm the saved preferences")
+	}
+
+	resp = postForm(t, client, srv.URL+"/admin/account/notifications", url.Values{
+		"csrf":             {csrf},
+		"realtime_enabled": {"1"},
+		"web_push_enabled": {"1"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("second save prefs = %d, want 303", resp.StatusCode)
+	}
+	prefs, err = st.GetAdminNotificationPrefs(t.Context(), admin.ID)
+	if err != nil {
+		t.Fatalf("GetAdminNotificationPrefs: %v", err)
+	}
+	if !prefs.Realtime || !prefs.WebPush || prefs.EntryCreated {
+		t.Fatalf("prefs after second save = %+v", prefs)
+	}
+}
+
+func TestAdminVAPIDGenerate(t *testing.T) {
+	srv, client, st := newAdminTestServer(t, config.Config{
+		AdminLoginRatePerMinute: 1000, AdminLoginRateBurst: 100,
+	})
+	csrf := setupAdmin(t, srv, client)
+
+	resp := postForm(t, client, srv.URL+"/admin/settings/notifications/vapid", url.Values{
+		"csrf": {csrf},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("generate VAPID = %d, want 303", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != "/admin/settings?saved=1#notifications" {
+		t.Fatalf("Location = %q", got)
+	}
+
+	values, err := st.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if values["notifications.vapid.public_key"] == "" {
+		t.Fatal("generated VAPID public key was not stored")
+	}
+	if values["notifications.vapid.private_key"] == "" {
+		t.Fatal("generated VAPID private key was not stored")
+	}
+	// The built-in click-URL default must not be pinned as an invalid override.
+	if values["notifications.click_url"] != "" {
+		t.Fatalf("click URL became an override: %q", values["notifications.click_url"])
+	}
+	if strings.Contains(values["notifications.vapid.private_key"], "BEGIN") {
+		t.Fatal("stored VAPID private key looks like a malformed placeholder")
 	}
 }
