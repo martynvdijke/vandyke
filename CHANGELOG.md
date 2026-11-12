@@ -1,3 +1,10 @@
+## [1.11.1](https://github.com/martynvdijke/vandyke/compare/v1.11.0...v1.11.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **docker:** claim the data volume before dropping privileges ([aa419fe](https://github.com/martynvdijke/vandyke/commit/aa419fe405a2772892449f63ce5f90944ca5f4db))
+
 # [1.11.0](https://github.com/martynvdijke/vandyke/compare/v1.10.3...v1.11.0) (2026-11-12)
 
 
