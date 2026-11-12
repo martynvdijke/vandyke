@@ -89,7 +89,7 @@ func (s *Store) YearReview(ctx context.Context, year int) (YearReview, error) {
 			count int
 		)
 		if err := monthRows.Scan(&month, &count); err != nil {
-			monthRows.Close()
+			_ = monthRows.Close()
 			return YearReview{}, fmt.Errorf("scan year month: %w", err)
 		}
 		if month >= 1 && month <= 12 {
@@ -97,10 +97,10 @@ func (s *Store) YearReview(ctx context.Context, year int) (YearReview, error) {
 		}
 	}
 	if err := monthRows.Err(); err != nil {
-		monthRows.Close()
+		_ = monthRows.Close()
 		return YearReview{}, fmt.Errorf("iterate year months: %w", err)
 	}
-	monthRows.Close()
+	_ = monthRows.Close()
 	for _, month := range review.Months {
 		if month.Count > review.BusiestMonthCount {
 			review.BusiestMonth = month.Month
@@ -123,16 +123,16 @@ func (s *Store) YearReview(ctx context.Context, year int) (YearReview, error) {
 	for personRows.Next() {
 		var pc PersonCount
 		if err := personRows.Scan(&pc.Person, &pc.Count); err != nil {
-			personRows.Close()
+			_ = personRows.Close()
 			return YearReview{}, fmt.Errorf("scan year person: %w", err)
 		}
 		review.TopPersons = append(review.TopPersons, pc)
 	}
 	if err := personRows.Err(); err != nil {
-		personRows.Close()
+		_ = personRows.Close()
 		return YearReview{}, fmt.Errorf("iterate year persons: %w", err)
 	}
-	personRows.Close()
+	_ = personRows.Close()
 
 	// Reuse ListEntries so visibility and ordering stay in one place.
 	ascending, err := s.ListEntries(ctx, ListParams{
