@@ -101,8 +101,9 @@ docker compose up -d --build
 ```
 
 The SQLite file lives in `./data` (mounted at `/data` in the container). The
-image is a static binary on Alpine running as a non-root user, with a
-`/healthz` healthcheck.
+image is a static binary on Alpine. Its entrypoint claims the mounted
+directory, then runs the server as the unprivileged `vandyke` user (uid 10001),
+so a bind mount needs no manual `chown`. `/healthz` is the healthcheck.
 
 ### Make targets
 

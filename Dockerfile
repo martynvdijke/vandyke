@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/vandyke ./cmd/vand
 # ---------- runtime ----------
 FROM alpine:3.24
 
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata su-exec \
     && addgroup -g 10001 -S vandyke \
     && adduser -u 10001 -S -G vandyke -h /app vandyke \
     && mkdir -p /data /app \
@@ -25,6 +25,8 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /app
 COPY --from=build /out/vandyke /app/vandyke
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV PORT=8080 \
     DB_PATH=/data/vandyke.db
@@ -32,9 +34,11 @@ ENV PORT=8080 \
 VOLUME ["/data"]
 EXPOSE 8080
 
-USER 10001:10001
+# The entrypoint starts as root only to repair the data volume's ownership,
+# then re-executes the server as uid 10001.
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["/app/vandyke"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/app/vandyke"]
