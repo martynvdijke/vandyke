@@ -1,3 +1,15 @@
+# [1.12.0](https://github.com/martynvdijke/vandyke/compare/v1.11.1...v1.12.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **push:** drop deprecated crypto and credentials APIs ([b995a71](https://github.com/martynvdijke/vandyke/commit/b995a7166866a00d2bd259673f1b2e5cfc1edffb))
+
+
+### Features
+
+* **notifications:** notify on new entries over SSE, Web Push and FCM ([454d4c9](https://github.com/martynvdijke/vandyke/commit/454d4c931db6005bff8f7bc757b55a7fa7981e26))
+
 ## [1.11.1](https://github.com/martynvdijke/vandyke/compare/v1.11.0...v1.11.1) (2026-11-12)
 
 
