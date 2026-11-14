@@ -131,7 +131,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  /* Matches the nav rhythm: the wordmark sits at the left edge, the nav is
+     pushed right by its auto margin, and the actions keep a 0.9rem seam. */
+  gap: 0.9rem;
 }
 
 .wordmark {
@@ -148,6 +150,13 @@ button {
 }
 
 .masthead-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-left: auto;
+}
+
+.masthead-actions {
   display: flex;
   align-items: center;
   gap: 0.9rem;
@@ -1971,8 +1980,14 @@ button {
     gap: 1.6rem;
   }
 
+  /* Developer plumbing (API) leaves the bar on narrow screens — the footer
+     still links it — but the admin door stays open. */
   .nav-link-muted {
     display: none;
+  }
+
+  .nav-link-signin {
+    display: inline-block;
   }
 }
 
@@ -2068,6 +2083,42 @@ button {
   margin-bottom: 0.4rem;
 }
 
+/* The bar carries too much to sit on one line below ~700px: fold it into two
+   rows — wordmark and controls on top, section links on a strip underneath
+   that scrolls sideways instead of pushing the page wider than the screen. */
+@media (max-width: 700px) {
+  .masthead-inner {
+    flex-wrap: wrap;
+    row-gap: 0.05rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.45rem;
+  }
+
+  .masthead-actions {
+    order: 1;
+    gap: 0.6rem;
+  }
+
+  .masthead-nav {
+    order: 2;
+    width: 100%;
+    margin-left: 0;
+    gap: 1.05rem;
+    padding: 0.25rem 0 0.2rem;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .masthead-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .masthead-nav .nav-link {
+    flex: 0 0 auto;
+  }
+}
+
 @media (max-width: 560px) {
   .masthead-inner,
   .page,
@@ -2078,7 +2129,7 @@ button {
   }
 
   .masthead-nav {
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
 
   .nav-link {
