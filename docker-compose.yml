@@ -2,7 +2,9 @@ services:
   vandyke:
     build: .
     image: vandyke:latest
-    container_name: vandyke
+    # Local/dev stack. Keep this name distinct from the deployed `vandyke`
+    # container (homelab/deathstar), which also uses the name `vandyke`.
+    container_name: vandyke-dev
     restart: unless-stopped
     ports:
       - "8080:8080"
