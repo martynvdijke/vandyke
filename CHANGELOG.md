@@ -1,3 +1,11 @@
+## [1.12.1](https://github.com/martynvdijke/vandyke/compare/v1.12.0...v1.12.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **docker:** keep the local dev container out of the deployed vandyke name ([f311d1b](https://github.com/martynvdijke/vandyke/commit/f311d1b28ca03f100cd5a53da3f58b9c3f046c10))
+* **web:** fold the masthead into two rows on phones ([fcb33b6](https://github.com/martynvdijke/vandyke/commit/fcb33b64ac289b7633b61e1fa61ca98f9613a75b))
+
 # [1.12.0](https://github.com/martynvdijke/vandyke/compare/v1.11.1...v1.12.0) (2026-11-12)
 
 
