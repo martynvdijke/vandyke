@@ -126,11 +126,51 @@ jobs:
           flutter-version-file: .fvmrc
           cache: true
 
+      # Without this the Gradle build silently falls back to the debug key,
+      # which changes per runner and makes Obtainium reject the update with
+      # "signed with a different key". Fail loudly instead of shipping that.
+      - name: Configure release signing
+        working-directory: mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set; refusing to publish a debug-signed APK"
+            exit 1
+          fi
+          base64 -d <<<"$ANDROID_KEYSTORE_BASE64" > keystore.jks
+          cat > key.properties <<EOF
+          storeFile=keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
       - name: Build release APK
         working-directory: mobile
         run: |
           flutter pub get
           flutter build apk --release
+
+      # Guards the Obtainium "different signing key" regression: a debug-signed
+      # APK must never reach a release.
+      - name: Verify release signature
+        working-directory: mobile
+        run: |
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          apksigner=$(find "$sdk/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -1) || true
+          if [ -z "$apksigner" ]; then
+            echo "::warning::apksigner not found; skipping signature check"
+            exit 0
+          fi
+          "$apksigner" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | tee /tmp/apk-certs.txt
+          if grep -q "CN=Android Debug" /tmp/apk-certs.txt; then
+            echo "::error::APK is debug-signed; release signing config was not applied"
+            exit 1
+          fi
 
       - name: Attach APK to GitHub Release
         env:

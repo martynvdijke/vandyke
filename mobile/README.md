@@ -90,9 +90,13 @@ debug builds install as `xyz.vandijke.vandyke.dev`.
 flutter build apk --release
 ```
 
-Release signing reads `android/key.properties` (see `key.properties.example`);
-without it the build falls back to the debug key so local release builds and CI
-still work. Debug builds install as `xyz.vandijke.vandyke.dev`.
+Release signing reads `android/key.properties` (see `key.properties.example`).
+Locally, without that file the build falls back to the debug key. CI never does:
+the release workflow writes `key.properties` from the `ANDROID_KEYSTORE_*`
+repository secrets, fails if the keystore secret is missing, and verifies the
+APK is not debug-signed. Every published APK is signed with the same upload key,
+which is what Obtainium requires for in-place updates. Debug builds install as
+`xyz.vandijke.vandyke.dev`.
 
 ## Test
 
