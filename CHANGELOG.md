@@ -1,3 +1,10 @@
+## [1.12.9](https://github.com/martynvdijke/vandyke/compare/v1.12.8...v1.12.9) (2026-11-22)
+
+
+### Bug Fixes
+
+* **deps:** update all non-major dependencies ([#41](https://github.com/martynvdijke/vandyke/issues/41)) ([97eb02c](https://github.com/martynvdijke/vandyke/commit/97eb02c83f956669964051565d2e1baa8928e96a))
+
 ## [1.12.8](https://github.com/martynvdijke/vandyke/compare/v1.12.7...v1.12.8) (2026-11-20)
 
 ## [1.12.7](https://github.com/martynvdijke/vandyke/compare/v1.12.6...v1.12.7) (2026-11-19)
