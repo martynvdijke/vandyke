@@ -1,3 +1,5 @@
+## [1.12.11](https://github.com/martynvdijke/vandyke/compare/v1.12.10...v1.12.11) (2026-11-25)
+
 ## [1.12.10](https://github.com/martynvdijke/vandyke/compare/v1.12.9...v1.12.10) (2026-11-24)
 
 ## [1.12.9](https://github.com/martynvdijke/vandyke/compare/v1.12.8...v1.12.9) (2026-11-22)

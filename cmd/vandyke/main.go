@@ -29,7 +29,7 @@ import (
 
 // Version is the application version. It is rewritten by semantic-release on
 // every published release.
-var Version = "1.12.10"
+var Version = "1.12.11"
 
 func main() {
 	if err := run(); err != nil {
